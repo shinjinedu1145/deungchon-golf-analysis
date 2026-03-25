@@ -1305,14 +1305,20 @@ if _ti == 0:
         <p style="color:#64748b; font-size:0.78rem; margin:2px 0 0 0;">88타석 실외 | ₩20억 투자 | 2026.06 오픈 | 5개년+10개년 재무모델링</p>
     </div>""", unsafe_allow_html=True)
 
+    def kpi_card(col, label, value, tooltip):
+        col.markdown(f"""<div style="background:#111827;border:1px solid #1e293b;border-radius:12px;padding:14px 16px;cursor:help;" title="{tooltip}">
+<div style="color:#94a3b8;font-size:11px;font-weight:600;">{label}</div>
+<div style="color:#f8fafc;font-size:22px;font-weight:800;margin-top:2px;">{value}</div>
+</div>""", unsafe_allow_html=True)
+
     k = st.columns(7)
-    k[0].metric("투자금", f"{s_inv}억")
-    k[1].metric("NPV", fmt억(npv_val))
-    k[2].metric("누적EBITDA", fmt억(cum_ebitda[-1]))
-    k[3].metric("회수율", f"{rec_rate[-1]*100:.1f}%")
-    k[4].metric("IRR", f"{irr_val*100:.1f}%")
-    k[5].metric("BEP매출", fmt억(bep_revenue))
-    k[6].metric("Payback", f"{payback:.1f}년" if payback else "5년+")
+    kpi_card(k[0], "투자금", f"{s_inv}억", "총 초기 투자금액\n건물+인테리어+장비+기타\n타석당 {s_inv*억/s_bays/만:,.0f}만원")
+    kpi_card(k[1], "NPV", fmt억(npv_val), f"순현재가치 (Net Present Value)\n할인율 {disc_rate*100:.0f}% 적용\n5개년 미래현금흐름의 현재가치 합계 - 투자금\nNPV > 0이면 투자가치 있음")
+    kpi_card(k[2], "누적EBITDA", fmt억(cum_ebitda[-1]), f"5년간 EBITDA 누적 합계\nEBITDA = 영업이익 + 감가상각비\n감가상각비는 현금유출이 아니므로\n실질 현금창출 능력을 보여주는 지표")
+    kpi_card(k[3], "회수율", f"{rec_rate[-1]*100:.1f}%", f"투자금 회수 비율\n= 누적EBITDA ÷ 투자금 × 100\n100% = 투자금 전액 회수\n현재 {rec_rate[-1]*100:.1f}% → 미회수 {(1-rec_rate[-1])*100:.1f}%")
+    kpi_card(k[4], "IRR", f"{irr_val*100:.1f}%", f"내부수익률 (Internal Rate of Return)\nNPV를 0으로 만드는 할인율\n할인율({disc_rate*100:.0f}%)보다 높으면 투자가치 있음\nIRR {irr_val*100:.1f}% vs 할인율 {disc_rate*100:.0f}%")
+    kpi_card(k[5], "BEP매출", fmt억(bep_revenue), f"손익분기 매출 (Break Even Point)\n이 매출 이상이면 영업이익 흑자\n= 고정비 ÷ (1 - 변동비율)\n현재 매출 대비 BEP 달성 여부 확인")
+    kpi_card(k[6], "Payback", f"{payback:.1f}년" if payback else "5년+", f"투자금 회수 기간\n누적EBITDA가 투자금을 넘는 시점\n5년 이내 회수가 업계 기준\n{'현재 5년 내 회수 어려움' if not payback or payback > 5 else f'{payback:.1f}년 내 회수 예상'}")
 
     if npv_val > 0:
         st.success("**투자적합** — NPV 양수, 할인율 기준 투자 수익 확보")
@@ -1690,7 +1696,11 @@ if _ti == 2:
                 yr_profit = dfy_k['이익'].sum()
                 yr_margin = yr_profit / yr_rev * 100 if yr_rev else 0
                 yr_summaries.append({'연도': yr, '매출': yr_rev, '비용': yr_cost, '이익': yr_profit, '영업이익률': yr_margin})
-                yk[i].metric(f"{yr}년 이익", f"{yr_profit/만:,.0f}만", delta=f"영업이익률 {yr_margin:.1f}%")
+                yk[i].markdown(f"""<div style="background:#111827;border:1px solid #1e293b;border-radius:12px;padding:16px;cursor:pointer;position:relative;" title="매출: {yr_rev/만:,.0f}만원\n비용: {yr_cost/만:,.0f}만원\n이익: {yr_profit/만:,.0f}만원\n영업이익률: {yr_margin:.1f}%\n\n이익 = 매출 - 추정비용\n영업이익률 = 이익 ÷ 매출 × 100">
+<div style="color:#94a3b8;font-size:12px;">{yr}년 이익</div>
+<div style="color:#f8fafc;font-size:24px;font-weight:800;">{yr_profit/만:,.0f}만</div>
+<div style="background:#166534;color:#86efac;display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;margin-top:4px;">영업이익률 {yr_margin:.1f}%</div>
+</div>""", unsafe_allow_html=True)
 
             # ── 4개년 종합 비교 테이블 ──
             subsec("4개년 종합 비교표")
