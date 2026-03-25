@@ -1313,10 +1313,10 @@ if _ti == 0:
 
     k = st.columns(7)
     kpi_card(k[0], "투자금", f"{s_inv}억", "총 초기 투자금액\n건물+인테리어+장비+기타\n타석당 {s_inv*억/s_bays/만:,.0f}만원")
-    kpi_card(k[1], "NPV", fmt억(npv_val), f"순현재가치 (Net Present Value)\n할인율 {disc_rate*100:.0f}% 적용\n5개년 미래현금흐름의 현재가치 합계 - 투자금\nNPV > 0이면 투자가치 있음")
+    kpi_card(k[1], "NPV", fmt억(npv_val), f"순현재가치 (Net Present Value)\n할인율 {disc_r*100:.0f}% 적용\n5개년 미래현금흐름의 현재가치 합계 - 투자금\nNPV > 0이면 투자가치 있음")
     kpi_card(k[2], "누적EBITDA", fmt억(cum_ebitda[-1]), f"5년간 EBITDA 누적 합계\nEBITDA = 영업이익 + 감가상각비\n감가상각비는 현금유출이 아니므로\n실질 현금창출 능력을 보여주는 지표")
     kpi_card(k[3], "회수율", f"{rec_rate[-1]*100:.1f}%", f"투자금 회수 비율\n= 누적EBITDA ÷ 투자금 × 100\n100% = 투자금 전액 회수\n현재 {rec_rate[-1]*100:.1f}% → 미회수 {(1-rec_rate[-1])*100:.1f}%")
-    kpi_card(k[4], "IRR", f"{irr_val*100:.1f}%", f"내부수익률 (Internal Rate of Return)\nNPV를 0으로 만드는 할인율\n할인율({disc_rate*100:.0f}%)보다 높으면 투자가치 있음\nIRR {irr_val*100:.1f}% vs 할인율 {disc_rate*100:.0f}%")
+    kpi_card(k[4], "IRR", f"{irr_val*100:.1f}%", f"내부수익률 (Internal Rate of Return)\nNPV를 0으로 만드는 할인율\n할인율({disc_r*100:.0f}%)보다 높으면 투자가치 있음\nIRR {irr_val*100:.1f}% vs 할인율 {disc_r*100:.0f}%")
     kpi_card(k[5], "BEP매출", fmt억(bep_revenue), f"손익분기 매출 (Break Even Point)\n이 매출 이상이면 영업이익 흑자\n= 고정비 ÷ (1 - 변동비율)\n현재 매출 대비 BEP 달성 여부 확인")
     kpi_card(k[6], "Payback", f"{payback:.1f}년" if payback else "5년+", f"투자금 회수 기간\n누적EBITDA가 투자금을 넘는 시점\n5년 이내 회수가 업계 기준\n{'현재 5년 내 회수 어려움' if not payback or payback > 5 else f'{payback:.1f}년 내 회수 예상'}")
 
