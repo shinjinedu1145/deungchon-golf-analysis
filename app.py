@@ -7,7 +7,12 @@ import io
 import json
 import os
 from datetime import datetime
-from data_fetcher import EconomicDataFetcher, API_GUIDE, DEFAULTS
+try:
+    from data_fetcher import EconomicDataFetcher, API_GUIDE, DEFAULTS
+except Exception:
+    EconomicDataFetcher = None
+    API_GUIDE = ""
+    DEFAULTS = {}
 from openpyxl import load_workbook
 import math
 import os
