@@ -10,6 +10,8 @@ from datetime import datetime
 from data_fetcher import EconomicDataFetcher, API_GUIDE, DEFAULTS
 from openpyxl import load_workbook
 import math
+import os
+import json
 
 # ══════════════════════════════════════════════════════════════
 # Auto-Save System (컨트롤 패널 값 자동 저장/복원)
@@ -228,6 +230,8 @@ div[data-testid="stRadio"] > div > label:hover {
 # Constants & Helpers
 # ══════════════════════════════════════════════════════════════
 EXCEL_PATH = r'C:\Users\win\Desktop\등촌 골프연습장 재무모델링 3월 19일 (2).xlsx'
+CACHE_PATH = os.path.join(os.path.dirname(__file__), 'excel_cache.json')
+USE_CACHE = not os.path.exists(EXCEL_PATH)  # Excel 없으면 캐시 사용 (Cloud 환경)
 억 = 100_000_000
 만 = 10_000
 
@@ -360,6 +364,16 @@ def fmt만(v): return f"{v/만:,.0f}만"
 # ══════════════════════════════════════════════════════════════
 @st.cache_data(ttl=120)
 def load_data():
+    # Cloud 환경: Excel 없으면 JSON 캐시 사용
+    if USE_CACHE:
+        with open(CACHE_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        # rent 회복률 키를 int로 변환
+        if 'assumptions' in data and 'rent' in data['assumptions']:
+            r = data['assumptions']['rent'].get('회복률', {})
+            data['assumptions']['rent']['회복률'] = {int(k): v for k, v in r.items()}
+        return data
+
     wb = load_workbook(EXCEL_PATH, data_only=True)
     def rv(ws, row, cols): return [ws.cell(row=row, column=c).value or 0 for c in cols]
     hc, pc = [2,3,4,5], [7,8,9,10,11]
