@@ -323,11 +323,19 @@ LO = dict(font=dict(family="Inter, sans-serif", size=13, color="#94a3b8"),
           legend=dict(orientation='h', y=-0.15, font=dict(size=12, color="#94a3b8"), bgcolor="rgba(0,0,0,0)"),
           xaxis=dict(gridcolor="rgba(30,41,59,0.5)", linecolor="#334155", tickfont=dict(size=12, color="#94a3b8"), showgrid=True),
           yaxis=dict(gridcolor="rgba(30,41,59,0.5)", linecolor="#334155", tickfont=dict(size=12, color="#94a3b8"), showgrid=True, zeroline=True, zerolinecolor="#334155"),
+          hovermode='x unified',
+          hoverlabel=dict(bgcolor="#1e293b", bordercolor="#475569", font=dict(size=13, color="#f8fafc", family="Inter, sans-serif")),
           title=dict(font=dict(size=15, color="#e2e8f0"), text="", x=0.02, xanchor='left'),
           hoverlabel=dict(bgcolor="#1e293b", font_size=13, font_color="#e2e8f0", bordercolor="#334155"))
 
 def lo(fig, **kw):
-    fig.update_layout(**{**LO, **kw}); return fig
+    layout = {**LO, **kw}
+    # Pie/Gauge/Waterfall은 hovermode='closest'로 강제
+    has_pie = any(isinstance(t, (go.Pie, go.Indicator, go.Waterfall)) for t in fig.data)
+    if has_pie:
+        layout['hovermode'] = 'closest'
+    fig.update_layout(**layout)
+    return fig
 
 def sec(icon, title):
     st.markdown(f'<div class="sec"><span>{icon}</span>{title}</div>', unsafe_allow_html=True)
