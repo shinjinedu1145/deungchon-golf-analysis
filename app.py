@@ -1226,9 +1226,8 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════
 # Navigation via radio buttons (wrap-friendly, no scroll)
 # ══════════════════════════════════════════════════════════════
-TAB_NAMES = ["📊 주요 대시보드", "📋 시나리오", "🎯 이익기여도", "🤖 AI전략", "📈 매출추정", "💸 비용추정", "📋 손익·BEP",
-    "🎯 투자/IRR", "💰 현금흐름", "🏪 임대매장",
-    "📍 상권·경쟁", "📉 골프시장·경제", "🔍 검증"]
+TAB_NAMES = ["대시보드", "시나리오", "기여도", "AI전략", "매출", "비용", "손익BEP",
+    "투자IRR", "현금흐름", "임대", "상권경쟁", "시장경제", "검증"]
 
 # ── 상단 버튼 바 (엑셀, 초기화, PDF) ──
 now_str = datetime.now().strftime('%Y%m%d_%H%M')
@@ -1258,16 +1257,17 @@ with btn_cols[3]:
 # ── 탭 네비게이션 (한 줄 정렬) ──
 st.markdown("""<style>
 div[data-testid="stRadio"] > div {
-    display: flex !important; flex-wrap: wrap !important;
-    gap: 4px 5px !important; padding-bottom: 4px !important;
-    justify-content: center !important;
+    display: flex !important; flex-wrap: nowrap !important;
+    gap: 3px !important; padding-bottom: 4px !important;
+    justify-content: center !important; overflow-x: auto !important;
 }
 div[data-testid="stRadio"] > div > label {
     background: #111827 !important; border: 1px solid #1e293b !important;
-    border-radius: 6px !important; padding: 7px 14px !important;
-    font-size: 13px !important; font-weight: 600 !important;
+    border-radius: 6px !important; padding: 6px 10px !important;
+    font-size: 12.5px !important; font-weight: 600 !important;
     color: #64748b !important; cursor: pointer !important;
     transition: all 0.15s ease !important; white-space: nowrap !important;
+    flex-shrink: 0 !important;
 }
 div[data-testid="stRadio"] > div > label:hover {
     background: #1e293b !important; color: #94a3b8 !important;
