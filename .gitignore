@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.claude/
+user_settings.json
+economic_cache.json
+*.xlsx
