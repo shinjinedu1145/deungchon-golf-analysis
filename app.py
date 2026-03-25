@@ -325,8 +325,7 @@ LO = dict(font=dict(family="Inter, sans-serif", size=13, color="#94a3b8"),
           yaxis=dict(gridcolor="rgba(30,41,59,0.5)", linecolor="#334155", tickfont=dict(size=12, color="#94a3b8"), showgrid=True, zeroline=True, zerolinecolor="#334155"),
           hovermode='x unified',
           hoverlabel=dict(bgcolor="#1e293b", bordercolor="#475569", font=dict(size=13, color="#f8fafc", family="Inter, sans-serif")),
-          title=dict(font=dict(size=15, color="#e2e8f0"), text="", x=0.02, xanchor='left'),
-          hoverlabel=dict(bgcolor="#1e293b", font_size=13, font_color="#e2e8f0", bordercolor="#334155"))
+          title=dict(font=dict(size=15, color="#e2e8f0"), text="", x=0.02, xanchor='left'))
 
 def lo(fig, **kw):
     layout = {**LO, **kw}
