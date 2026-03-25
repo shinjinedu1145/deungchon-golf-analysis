@@ -336,9 +336,7 @@ def subsec(title):
     st.markdown(f'<div class="sub-sec">{title}</div>', unsafe_allow_html=True)
 
 def info(text):
-    """클릭하면 상세 설명이 펼쳐지는 팝업형 안내"""
-    with st.popover("ℹ️ 설명 보기", use_container_width=True):
-        st.markdown(f'<div style="color:#cbd5e1;font-size:13px;line-height:1.7;">{text}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="info-box">{text}</div>', unsafe_allow_html=True)
 
 def warn(text):
     st.markdown(f'<div class="warn-box">{text}</div>', unsafe_allow_html=True)
