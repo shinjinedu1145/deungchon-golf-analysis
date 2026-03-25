@@ -55,58 +55,7 @@ def sv(key, default):
 
 st.set_page_config(page_title="등촌골프연습장 사업성 분석", page_icon="⛳", layout="wide", initial_sidebar_state="expanded")
 
-# ══════════════════════════════════════════════════════════════
-# Authentication (접속 인증)
-# ══════════════════════════════════════════════════════════════
-# 계정 변경: 아래 딕셔너리에 "아이디": "비밀번호" 형태로 추가/수정
-ALLOWED_USERS = {
-    "shinjin1145": "sj3546005",    # 관리자
-}
-
-def check_auth():
-    """로그인 인증 화면. 인증되지 않으면 대시보드를 표시하지 않습니다."""
-    if 'authenticated' not in st.session_state:
-        st.session_state.authenticated = False
-    if st.session_state.authenticated:
-        return True
-
-    st.markdown("""<style>
-    .auth-box { max-width:450px; margin:80px auto; padding:40px; background:linear-gradient(135deg,#1e293b,#0f172a);
-        border:1px solid #334155; border-radius:20px; box-shadow:0 20px 60px rgba(0,0,0,0.5); text-align:center; }
-    .auth-title { color:#f8fafc; font-size:2rem; font-weight:800; margin-bottom:8px; }
-    .auth-sub { color:#94a3b8; font-size:0.9rem; margin-bottom:30px; }
-    .auth-icon { font-size:4rem; margin-bottom:16px; }
-    </style>""", unsafe_allow_html=True)
-
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown("""
-        <div class="auth-box">
-            <div class="auth-icon">⛳🔒</div>
-            <div class="auth-title">등촌골프연습장</div>
-            <div class="auth-sub">사업성 분석 대시보드 — 인가된 사용자만 접속 가능</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        with st.form("login_form"):
-            user_id = st.text_input("아이디", placeholder="아이디를 입력하세요")
-            password = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요")
-            submitted = st.form_submit_button("🔓 로그인", use_container_width=True)
-
-            if submitted:
-                if user_id in ALLOWED_USERS and ALLOWED_USERS[user_id] == password:
-                    st.session_state.authenticated = True
-                    st.session_state.user_id = user_id
-                    st.rerun()
-                else:
-                    st.error("❌ 아이디 또는 비밀번호가 틀렸습니다.")
-
-        st.caption("접속 권한이 필요하시면 관리자에게 문의하세요.")
-
-    return False
-
-if not check_auth():
-    st.stop()
+# 로그인 기능 제거됨 — 누구나 접속 가능
 
 # ══════════════════════════════════════════════════════════════
 # Premium CSS
@@ -1014,14 +963,6 @@ with st.sidebar:
 
     # Quick summary metrics (will be filled later after calculations)
 
-    # Logout button
-    st.markdown("---")
-    user_label = st.session_state.get('user_id', 'user')
-    st.caption(f"👤 접속: **{user_label}**")
-    if st.button("🔒 로그아웃", use_container_width=True):
-        st.session_state.authenticated = False
-        st.session_state.pop('user_id', None)
-        st.rerun()
 
 # ══════════════════════════════════════════════════════════════
 # Core Calculations
