@@ -2933,7 +2933,7 @@ if _ti == 3:
     st.markdown("""
 <div style="background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:16px;margin:10px 0;">
 <div style="color:#60a5fa;font-weight:700;font-size:13px;margin-bottom:10px;">등촌 추천가 vs 경쟁사 차이 (1개월 종일 기준, 실제 데이터)</div>
-<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;text-align:center;">
+<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;text-align:center;">
 <div style="background:#111827;border-radius:8px;padding:12px;">
 <div style="color:#fca5a5;font-size:12px;font-weight:600;">제니스 (300,000원)</div>
 <div style="color:#86efac;font-size:20px;font-weight:800;">-3.3%</div>
@@ -2943,11 +2943,6 @@ if _ti == 3:
 <div style="color:#e2e8f0;font-size:12px;font-weight:600;">메이필드 (322,000원)</div>
 <div style="color:#86efac;font-size:20px;font-weight:800;">-9.9%</div>
 <div style="color:#94a3b8;font-size:11px;">32,000원 저렴 (호텔 프리미엄)</div>
-</div>
-<div style="background:#111827;border-radius:8px;padding:12px;">
-<div style="color:#e2e8f0;font-size:12px;font-weight:600;">88CC (200,000원)</div>
-<div style="color:#fca5a5;font-size:20px;font-weight:800;">+45.0%</div>
-<div style="color:#94a3b8;font-size:11px;">90,000원 비쌈 (골프장 부설, 저가)</div>
 </div>
 </div>
 </div>
