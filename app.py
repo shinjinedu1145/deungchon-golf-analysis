@@ -248,8 +248,9 @@ def generate_excel(D, rev_p, cost_p, op_p, ebitda_p, cum_ebitda, margins, rec_ra
         # 5. 투자 분석
         inv_df = pd.DataFrame({
             '지표': ['투자금', 'NPV', 'IRR', '5년회수율', '누적EBITDA', 'Payback'],
-            '값': [f"{inv_won/1e8:.0f}억", f"{sum(e/(1+0.1)**(i+1) for i,e in enumerate(ebitda_p))/1e8-inv_won/1e8:.1f}억",
-                   f"{14.3}%", f"{rec_rate[-1]*100:.1f}%", f"{cum_ebitda[-1]/1e8:.1f}억", '5년+']
+            '값': [f"{inv_won/1e8:.0f}억", f"{npv_val/1e8:.1f}억",
+                   f"{irr_val*100:.1f}%", f"{rec_rate[-1]*100:.1f}%", f"{cum_ebitda[-1]/1e8:.1f}억",
+                   f"{payback:.1f}년" if payback and payback <= 5 else '5년+']
         })
         inv_df.to_excel(writer, sheet_name='투자분석', index=False)
 
@@ -291,14 +292,34 @@ LO = dict(font=dict(family="Inter, sans-serif", size=13, color="#94a3b8"),
           hoverlabel=dict(bgcolor="#1e293b", bordercolor="#475569", font=dict(size=13, color="#f8fafc", family="Inter, sans-serif")),
           title=dict(font=dict(size=15, color="#e2e8f0"), text="", x=0.02, xanchor='left'))
 
+_chart_counter = [0]
 def lo(fig, **kw):
     layout = {**LO, **kw}
-    # Pie/Gauge/Waterfall은 hovermode='closest'로 강제
     has_pie = any(isinstance(t, (go.Pie, go.Indicator, go.Waterfall)) for t in fig.data)
     if has_pie:
         layout['hovermode'] = 'closest'
     fig.update_layout(**layout)
+    # x축 category 강제 + categoryarray 명시
+    has_h_bar = any(hasattr(t, 'orientation') and t.orientation == 'h' for t in fig.data)
+    has_heatmap = any(isinstance(t, go.Heatmap) for t in fig.data)
+    if not has_h_bar and not has_heatmap and not has_pie:
+        # X축 데이터에서 카테고리 추출
+        x_vals = []
+        for t in fig.data:
+            if hasattr(t, 'x') and t.x is not None:
+                x_vals = list(t.x)
+                break
+        if x_vals:
+            fig.update_xaxes(type='category', categoryorder='array', categoryarray=x_vals)
+        else:
+            fig.update_xaxes(type='category')
+    _chart_counter[0] += 1
     return fig
+
+def chart_key():
+    """각 차트에 고유 key 부여"""
+    _chart_counter[0] += 1
+    return f"chart_{_chart_counter[0]}"
 
 def sec(icon, title):
     st.markdown(f'<div class="sec"><span>{icon}</span>{title}</div>', unsafe_allow_html=True)
@@ -425,7 +446,7 @@ def load_data():
 
     wb.close()
     return {
-        'yh': ['2018A','2019A','2020A','2021A'], 'yp': ['2026F','2027F','2028F','2029F','2030F'],
+        'yh': ['2018년','2019년','2020년','2021년'], 'yp': ['2026년','2027년','2028년','2029년','2030년'],
         'rev_h': rv(ws5,16,hc), 'rev_p': rv(ws5,16,pc),
         'cost_h': rv(ws5,30,hc), 'cost_p': rv(ws5,30,pc),
         'op_h': rv(ws5,32,hc), 'op_p': rv(ws5,32,pc),
@@ -618,7 +639,7 @@ with st.sidebar:
         st.caption(f"1개월 평균: {p_1m:,}원 | 3개월: {p_3m:,}원 | 6개월: {p_6m:,}원")
         st.caption(f"쿠폰: {p_coupon:,}원 | 일일: {p_daily:,}원 | 레슨: {p_lesson:,}원")
 
-    with st.expander("👥 회원수 가정"):
+    with st.expander("👥 회원수 가정(상세)"):
         st.caption("ℹ️ 2026F 9개월(6~2월) 기준. 2018년 실적 ×60% ×9/12 기준 산출. 요금표와 동일 구조(시간대별)로 분리되어 있습니다.")
 
         # ── 1개월 회원 (시간대별) ──
@@ -777,8 +798,10 @@ with st.sidebar:
         desk_s = lc2.number_input("안내 월급 (만원)", value=sv('l_desk_s', 300), step=10, key='l_desk_s')
 
         st.markdown("---")
-        s_insurance = st.number_input("4대보험 사업주부담 (%)", value=sv('s_ins', 9.0), step=0.5, key='s_ins', help="국민연금4.5%+건강3.5%+고용0.9%+산재0.7%≈9.6%") / 100
+        s_insurance = st.number_input("4대보험 사업주부담 (%)", value=sv('s_ins', 9.6), step=0.5, key='s_ins', help="국민연금4.5%+건강보험3.545%+고용보험0.9%+산재보험0.7%=9.645% (2025년 법정비율)") / 100
         s_labor_up = st.number_input("연간 인건비 인상률 (%)", value=sv('s_lab_up', float(A['cost']['인건비인상률'][1]*100)), step=0.5, key='s_lab_up', help="매년 임금 인상률. 최저임금 인상률 참고") / 100
+
+        st.caption("⚠️ **퇴직충당금**(급여의 8.33%=1/12)은 별도 발생. **부가세**(매출의 약 9.09%)는 매출에 포함된 총액 기준이며 별도 분리하지 않음. **운전자금**(선수금 등)은 현금흐름에 미반영.")
 
         st.markdown("---")
         st.markdown("**📊 자동 산출 결과**")
@@ -906,19 +929,28 @@ with st.sidebar:
         ecos_key = st.text_input("ECOS API 키", type="password", key='ecos_k', help="한국은행 ecos.bok.or.kr")
         kosis_key = st.text_input("KOSIS API 키", type="password", key='kosis_k', help="통계청 kosis.kr")
 
-        fetcher = EconomicDataFetcher(ecos_key, kosis_key)
-        status = fetcher.get_status()
-
-        if st.button("🔄 지금 갱신 (API 호출)", key='btn_refresh'):
-            with st.spinner("데이터 수집 중..."):
-                econ_data = fetcher.refresh()
-                st.session_state['econ_data'] = econ_data
-                st.success(f"갱신 완료: {econ_data.get('notes','')}")
-                st.rerun()
+        if EconomicDataFetcher is not None:
+            fetcher = EconomicDataFetcher(ecos_key, kosis_key)
+            status = fetcher.get_status()
+            if st.button("지금 갱신 (API 호출)", key='btn_refresh'):
+                with st.spinner("데이터 수집 중..."):
+                    econ_data = fetcher.refresh()
+                    st.session_state['econ_data'] = econ_data
+                    st.success(f"갱신 완료: {econ_data.get('notes','')}")
+                    st.rerun()
+        else:
+            status = "API 모듈 미설치"
+            st.caption("data_fetcher.py가 없으면 수동 입력으로 운영됩니다.")
 
         # 캐시 또는 기본값 로드
         if 'econ_data' not in st.session_state:
-            st.session_state['econ_data'] = fetcher.get_all()
+            if EconomicDataFetcher is not None:
+                try:
+                    st.session_state['econ_data'] = fetcher.get_all()
+                except Exception:
+                    st.session_state['econ_data'] = DEFAULTS.copy() if 'DEFAULTS' in dir() else {'source': 'default'}
+            else:
+                st.session_state['econ_data'] = DEFAULTS.copy() if 'DEFAULTS' in dir() else {'source': 'default'}
         ed = st.session_state['econ_data']
 
         src_label = ed.get('source', 'default')
@@ -955,7 +987,8 @@ with st.sidebar:
         ew_disp = st.number_input("가처분소득 가중치", value=sv('ew_disp', 20), step=5, key='ew_disp')
 
     with st.expander("🎯 할인율 / 세율"):
-        s_disc = st.slider("할인율-WACC (%)", 5, 25, int(D['dr']*100), 1, key='s_disc')
+        s_disc = st.slider("할인율-WACC (%)", 5, 25, int(D['dr']*100), 1, key='s_disc',
+            help="할인율 = 무위험수익률(은행이자 3~4%) + 사업리스크(3~4%) + 유동성프리미엄(2~3%). 은행에 넣으면 확실히 3~4%를 버는데, 리스크를 감수하고 투자할 가치가 있는지 판단하는 기준. 10%를 넘기면 '은행보다 확실히 낫다'고 판단 가능. 사학법인 기준 8~12% 권장.")
         s_tax_rate = st.number_input("법인세율 (%)", value=sv('s_taxr', float(A['invest']['법인세율']*100)), step=1.0, key='s_taxr') / 100
 
     st.markdown("---")
@@ -1020,6 +1053,9 @@ econ_rev_adj = econ_score / 55
 combined_adj = ta_rev_adj * econ_rev_adj
 
 # ══ 컨트롤 패널 기반 5개년 매출·비용 재계산 ══
+# ── 이탈률 가중평균 (매출 보정에 사용) ──
+w_churn = (s_churn_sum * 2 + s_churn_win * 2 + s_churn_perm * 5) / 9
+
 # ── 보정 계수 종합 ──
 # 1) 시즌 가중치 (비수기 반영)
 _sw = D['season_weights'] if D['season_weights'] else [1]*9
@@ -1033,27 +1069,68 @@ _ramp_avg = sum(ramp_values) / len(ramp_values) if ramp_values else 0.5  # 약 0
 
 # ── 2026F 매출: 이론치 × 시즌보정 × 램프업 × 상권보정 × 경제보정 ──
 _golf_rev_9m_raw = custom_total_rev - _rent_2026  # 골프 이론 매출 (회원수×단가)
-_adj_2026 = _season_avg * _ramp_avg * ta_rev_adj * econ_rev_adj  # 종합 보정계수
-_rev_2026 = _golf_rev_9m_raw * _adj_2026 + _rent_2026  # 보정 적용 + 임대(별도)
+# 5) 환불 보정만 적용
+# 주의: 이탈률/유치율은 이미 회원수 가정(2018 대비 60%)에 내재됨 — 매출에 이중 적용 금지
+# 환불비율만 매출에서 차감 (회원권 구매 후 환불/변경)
+_refund_adj = 1 - s_refund  # 환불비율 (예: 4% → ×0.96)
 
-# ── 2027F~: 램프업 해제(정상가동), 시즌+상권+경제 보정 유지 ──
-_adj_normal = _season_avg * ta_rev_adj * econ_rev_adj  # 램프업 제외
+# 회원수 = 9개월 총 누적 (2018×60%×9/12). 시즌/램프업은 월별 분배에만 사용
+# 연간 매출 보정: 이탈률(중도해지) + 환불(구매후취소) + 상권(입지) + 경제(외부환경)
+_churn_adj = 1 - w_churn  # 가중평균 이탈률 차감 (비수기 해지 반영)
+_adj_2026 = _churn_adj * _refund_adj * ta_rev_adj * econ_rev_adj  # 이탈+환불+상권+경제
+_rev_2026 = _golf_rev_9m_raw * _adj_2026 + _rent_2026
+
+# ── 2027F~: 정상가동 (12개월), 동일 보정 ──
+_adj_normal = _churn_adj * _refund_adj * ta_rev_adj * econ_rev_adj
 _golf_rev_annual = _golf_rev_9m_raw * 12 / 9 * _adj_normal  # 12개월 환산
 _rev_full_yr = _golf_rev_annual + _rent_annual
 
 rev_p = [_rev_2026]
-for i in range(4):
-    rev_p.append(_rev_full_yr * (1 + s_growth) ** (i + 1))
+# 2027F = 정상가동 기준, 2028F~ = 전년 대비 성장률 적용
+rev_p.append(_rev_full_yr)  # 2027F: 정상가동 첫해 (성장률 미적용)
+for i in range(1, 4):
+    rev_p.append(_rev_full_yr * (1 + s_growth) ** i)  # 2028F~2030F
 
 # 2026F 비용: 컨트롤 패널 (인건비 + 운영비) × 9개월 + 감가상각
 _monthly_total_cost = monthly_labor * 만 + op_total_monthly * 만  # 원 단위
 _cost_2026 = _monthly_total_cost * 9 + dep[0]  # 9개월 운영비 + 감가상각
 cost_p = [_cost_2026]
+# 운영비 항목별 월액 (원 단위)
+_op_elec_m = op_electric * 만
+_op_water_m = op_water * 만
+_op_tax_m = op_tax * 만
+_op_insur_m = op_insurance * 만
+_op_supply_m = op_supplies * 만
+_op_maint_m = op_maint * 만
+_op_card_m = custom_total_rev * op_card_fee / 12  # 매출×수수료율÷12 (월 원 단위, op_card_fee는 이미 소수)
+_op_outsource_m = op_outsource * 만
+_op_etc_m = op_etc * 만
+_op_mkt_m = op_marketing * 만
 for i in range(4):
-    # 인건비: 인상률 적용, 운영비: 물가상승률 적용
-    yr_labor = monthly_labor * 만 * 12 * (1 + s_labor_up) ** (i + 1)
-    yr_opex = op_total_monthly * 만 * 12 * (1 + s_util_up) ** (i + 1)
-    cost_p.append(yr_labor + yr_opex + dep[min(i + 1, len(dep) - 1)])
+    y = i + 1
+    # 인건비: 인건비 인상률
+    yr_labor = monthly_labor * 만 * 12 * (1 + s_labor_up) ** y
+    # 전기료: 전기료 인상률
+    yr_elec = _op_elec_m * 12 * (1 + s_elec_up) ** y
+    # 수도광열비: 물가상승률
+    yr_water = _op_water_m * 12 * (1 + s_util_up) ** y
+    # 세금과공과: 세금 인상률
+    yr_tax = _op_tax_m * 12 * (1 + s_tax_up) ** y
+    # 보험료: 물가상승률
+    yr_insur = _op_insur_m * 12 * (1 + s_util_up) ** y
+    # 소모품비: 소모품 인상률
+    yr_supply = _op_supply_m * 12 * (1 + s_supply_up) ** y
+    # 수선비: 물가상승률
+    yr_maint = _op_maint_m * 12 * (1 + s_util_up) ** y
+    # 카드수수료: 매출 연동 (매출 × 수수료율)
+    yr_card = rev_p[y] * op_card_fee if y < len(rev_p) else _op_card_m * 12  # op_card_fee는 이미 소수(0.02)
+    # 용역비: 용역비 인상률
+    yr_outsource = _op_outsource_m * 12 * (1 + s_outsource_up) ** y
+    # 기타+마케팅: 각각 적용
+    yr_etc = _op_etc_m * 12 * (1 + s_util_up) ** y
+    yr_mkt = _op_mkt_m * 12 * (1 + s_mkt_up) ** y
+    yr_opex_total = yr_elec + yr_water + yr_tax + yr_insur + yr_supply + yr_maint + yr_card + yr_outsource + yr_etc + yr_mkt
+    cost_p.append(yr_labor + yr_opex_total + dep[min(y, len(dep) - 1)])
 
 op_p = [r - c for r, c in zip(rev_p, cost_p)]
 ebitda_p = [o + d for o, d in zip(op_p, dep[:len(op_p)])]
@@ -1063,13 +1140,17 @@ cc_ = 0
 for e in ebitda_p:
     cc_ += e; cum_ebitda.append(cc_)
 rec_rate = [c / inv_won if inv_won else 0 for c in cum_ebitda]
-npv_val = sum(e / (1 + disc_r) ** (i + 1) for i, e in enumerate(ebitda_p)) - inv_won
+
+# FCF = EBITDA - 법인세 (영업이익 기준 과세, 적자 시 세금 0)
+fcf_p = [e - max(o * s_tax_rate, 0) for e, o in zip(ebitda_p, op_p)]
+npv_val = sum(f / (1 + disc_r) ** (i + 1) for i, f in enumerate(fcf_p)) - inv_won
 
 try:
     from numpy_financial import irr as np_irr
-    irr_val = float(np_irr([-inv_won] + ebitda_p))
+    irr_val = float(np_irr([-inv_won] + fcf_p))
 except Exception:
-    irr_val = (sum(ebitda_p) / 5) / inv_won if inv_won else 0
+    np_irr = None
+    irr_val = (sum(fcf_p) / 5) / inv_won if inv_won else 0
 
 payback = None
 cum_temp = 0
@@ -1078,7 +1159,7 @@ for i, e in enumerate(ebitda_p):
     if cum_temp >= inv_won and prev < inv_won:
         payback = i + ((inv_won - prev) / e if e else 0); break
 
-w_churn = (s_churn_sum * 2 + s_churn_win * 2 + s_churn_perm * 5) / 9
+# w_churn은 라인 1027에서 이미 정의됨
 
 # ══ BEP — 컨트롤 패널 기반 재계산 ══
 _yr_labor_cost = monthly_labor * 만 * 12  # 연간 인건비 (원)
@@ -1098,17 +1179,20 @@ semi_total = _yr_electric + _yr_water + _yr_outsource  # 준변동비
 fixed_total += semi_total * 0.6
 var_total += semi_total * 0.4
 
-var_ratio = var_total / rev_p[0] if rev_p[0] else 0.1
+# BEP는 정상 가동 연도(2027F) 기준으로 산출 (2026F는 9개월+오픈초기라 비정상)
+_bep_rev_base = rev_p[1] if len(rev_p) > 1 else rev_p[0]
+var_ratio = var_total / _bep_rev_base if _bep_rev_base else 0.1
 contrib_margin = 1 - var_ratio
 bep_revenue = fixed_total / contrib_margin if contrib_margin > 0 else 0
 bep_members = bep_revenue / (custom_total_rev / total_members) if total_members and custom_total_rev else 0
-safety_margin = (rev_p[0] - bep_revenue) / rev_p[0] * 100 if rev_p[0] else 0
+safety_margin = (_bep_rev_base - bep_revenue) / _bep_rev_base * 100 if _bep_rev_base else 0
 
 # ══ 월별 데이터 — 컨트롤 패널 기반 재계산 ══
-# 월별 매출: 이론 매출 ÷ 9 × 시즌가중치 × 램프업 × 상권보정 × 경제보정
+# 월별 매출: 이론 매출 ÷ 9 × 시즌가중치 × 램프업 × (이탈+환불+상권+경제)
 _monthly_base_rev = _golf_rev_9m_raw / 9  # 월 평균 이론 매출
-mrev_custom = [int(_monthly_base_rev * w * r * ta_rev_adj * econ_rev_adj)
-               for w, r in zip(_sw, ramp_values)]  # 시즌 × 램프업 × 상권 × 경제
+_monthly_adj_factor = _churn_adj * _refund_adj * ta_rev_adj * econ_rev_adj  # 연간 보정 동일
+mrev_custom = [int(_monthly_base_rev * w * r * _monthly_adj_factor)
+               for w, r in zip(_sw, ramp_values)]  # 시즌 × 램프업(소수) × 보정
 _monthly_base_cost = _monthly_total_cost
 mcost_custom = [int(_monthly_base_cost) for _ in _sw]  # 비용은 월 고정
 
@@ -1189,20 +1273,59 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════
 # Navigation via radio buttons (wrap-friendly, no scroll)
 # ══════════════════════════════════════════════════════════════
-TAB_NAMES = ["대시보드", "시나리오", "기여도", "AI전략", "매출", "비용", "손익BEP",
+TAB_NAMES = ["대시보드", "시나리오", "기여도", "운영전략", "매출", "비용", "손익BEP",
     "투자IRR", "현금흐름", "임대", "상권경쟁", "시장경제", "검증"]
 
-# ── 상단 버튼 바 (엑셀, 초기화, PDF) ──
+# ── 통합 네비게이션 바 (탭 + 버튼) ──
 now_str = datetime.now().strftime('%Y%m%d_%H%M')
-btn_cols = st.columns([6, 1.2, 1, 1.2])
-with btn_cols[1]:
+
+st.markdown("""<style>
+/* 탭 그리드 */
+div[data-testid="stRadio"] > div {
+    display: grid !important;
+    grid-template-columns: repeat(7, 1fr) !important;
+    gap: 5px !important; padding: 0 !important;
+}
+div[data-testid="stRadio"] > div > label {
+    background: #111827 !important; border: 1px solid #1e293b !important;
+    border-radius: 8px !important; padding: 9px 0 !important;
+    font-size: 13px !important; font-weight: 600 !important;
+    color: #64748b !important; cursor: pointer !important;
+    transition: all 0.15s ease !important; white-space: nowrap !important;
+    text-align: center !important;
+}
+div[data-testid="stRadio"] > div > label:hover {
+    background: #1e293b !important; color: #e2e8f0 !important; border-color: #334155 !important;
+}
+div[data-testid="stRadio"] > div > label[data-checked="true"],
+div[data-testid="stRadio"] > div > label:has(input:checked) {
+    background: linear-gradient(135deg, #2563eb, #3b82f6) !important; color: #ffffff !important;
+    border-color: #3b82f6 !important; box-shadow: 0 2px 8px rgba(59,130,246,0.3) !important;
+}
+div[data-testid="stRadio"] > div > label > div:first-child { display: none !important; }
+div[data-testid="stRadio"] > label { display: none !important; }
+/* 다운로드 버튼 스타일 */
+.toolbar-wrap { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 10px; }
+.toolbar-wrap .stDownloadButton button, .toolbar-wrap .stButton button {
+    font-size: 12px !important; padding: 6px 14px !important;
+    border-radius: 8px !important; background: #1e293b !important;
+    border: 1px solid #334155 !important; color: #94a3b8 !important;
+}
+.toolbar-wrap .stDownloadButton button:hover, .toolbar-wrap .stButton button:hover {
+    background: #334155 !important; color: #e2e8f0 !important;
+}
+</style>""", unsafe_allow_html=True)
+
+# 버튼 바 (오른쪽 정렬, 작게)
+bc = st.columns([7, 0.8, 0.6, 0.7])
+with bc[1]:
     excel_data = generate_excel(D, rev_p, cost_p, op_p, ebitda_p, cum_ebitda, margins, rec_rate, inv_won)
-    st.download_button("📥 엑셀 다운로드", data=excel_data,
-        file_name=f"등촌골프_사업분석_{now_str}.xlsx",
+    st.download_button("엑셀 다운", data=excel_data,
+        file_name=f"등촌골프_{now_str}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True)
-with btn_cols[2]:
-    if st.button("🔄 초기화", use_container_width=True, help="모든 설정값을 기본값으로 초기화합니다"):
+with bc[2]:
+    if st.button("초기화", use_container_width=True, help="모든 설정을 기본값으로"):
         import os as _os
         _save_path = _os.path.join(_os.path.dirname(__file__), 'user_settings.json')
         if _os.path.exists(_save_path):
@@ -1210,40 +1333,14 @@ with btn_cols[2]:
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()
-with btn_cols[3]:
+with bc[3]:
     csv_data = generate_csv_summary(D, rev_p, cost_p, op_p, ebitda_p, margins, rec_rate)
-    st.download_button("📥 PDF/CSV", data=csv_data,
-        file_name=f"등촌골프_손익요약_{now_str}.csv",
+    st.download_button("CSV", data=csv_data,
+        file_name=f"등촌골프_{now_str}.csv",
         mime="text/csv",
         use_container_width=True)
 
-# ── 탭 네비게이션 (한 줄 정렬) ──
-st.markdown("""<style>
-div[data-testid="stRadio"] > div {
-    display: flex !important; flex-wrap: nowrap !important;
-    gap: 3px !important; padding-bottom: 4px !important;
-    justify-content: center !important; overflow-x: auto !important;
-}
-div[data-testid="stRadio"] > div > label {
-    background: #111827 !important; border: 1px solid #1e293b !important;
-    border-radius: 6px !important; padding: 6px 10px !important;
-    font-size: 12.5px !important; font-weight: 600 !important;
-    color: #64748b !important; cursor: pointer !important;
-    transition: all 0.15s ease !important; white-space: nowrap !important;
-    flex-shrink: 0 !important;
-}
-div[data-testid="stRadio"] > div > label:hover {
-    background: #1e293b !important; color: #94a3b8 !important;
-}
-div[data-testid="stRadio"] > div > label[data-checked="true"],
-div[data-testid="stRadio"] > div > label:has(input:checked) {
-    background: #3b82f6 !important; color: #ffffff !important;
-    border-color: #3b82f6 !important;
-}
-div[data-testid="stRadio"] > div > label > div:first-child { display: none !important; }
-div[data-testid="stRadio"] > label { display: none !important; }
-</style>""", unsafe_allow_html=True)
-
+# 탭 네비게이션
 selected_tab = st.radio("nav", TAB_NAMES, horizontal=True, label_visibility="collapsed", key="main_nav")
 _ti = TAB_NAMES.index(selected_tab)
 
@@ -1255,10 +1352,10 @@ _ti = TAB_NAMES.index(selected_tab)
 # ═══ TAB 0: Dashboard ═══
 if _ti == 0:
     # Header + KPI inside dashboard tab
-    st.markdown("""<div style="background:linear-gradient(135deg,#111827 0%,#1e293b 100%);
+    st.markdown(f"""<div style="background:linear-gradient(135deg,#111827 0%,#1e293b 100%);
         padding:14px 24px 10px 24px; border-radius:8px; border:1px solid #1e293b; margin-bottom:10px;">
         <h1 style="color:#f1f5f9; font-size:1.3rem; font-weight:800; margin:0;">⛳ 등촌골프연습장 사업성 분석</h1>
-        <p style="color:#64748b; font-size:0.78rem; margin:2px 0 0 0;">88타석 실외 | ₩20억 투자 | 2026.06 오픈 | 5개년+10개년 재무모델링</p>
+        <p style="color:#64748b; font-size:0.78rem; margin:2px 0 0 0;">{s_bays}타석 실외 | {s_inv}억 투자 | 2026.06 오픈 | 5개년+10개년 재무모델링</p>
     </div>""", unsafe_allow_html=True)
 
     def kpi_card(col, label, value, tip_rows):
@@ -1275,43 +1372,82 @@ if _ti == 0:
 
     k = st.columns(7)
     kpi_card(k[0], "투자금", f"{s_inv}억", [
-        ("구분","총 초기 투자금"),
-        ("타석당",f"{s_inv*억/s_bays/만:,.0f}만원"),
+        ("구분","총 초기 투자금액"),
+        ("타석당 투자",f"{s_inv*억/s_bays/만:,.0f}만원"),
         ("타석수",f"{s_bays}타석"),
+        ("─────","──────────"),
+        ("정액법 상각",f"{dep_straight_amt:,}만원/년"),
+        ("정률법 상각",f"{dep_declining_amt:,}만원/년"),
+        ("연간 감가합계",f"{dep_straight_amt+dep_declining_amt:,}만원/년"),
     ])
     kpi_card(k[1], "NPV", fmt억(npv_val), [
-        ("정의","순현재가치"),
-        ("할인율",f"{disc_r*100:.0f}%"),
-        ("판정","투자가치 있음" if npv_val>0 else "투자가치 부족"),
-        ("산식","미래현금흐름 현재가치 - 투자금"),
+        ("정의","세후FCF를 할인율로 현재가치 환산 합계 - 투자금"),
+        ("할인율(WACC)",f"{disc_r*100:.0f}% (무위험3~4%+사업리스크3~4%+유동성2~3%)"),
+        ("─────","──────────"),
+        ("2026F EBITDA",fmt억(ebitda_p[0])),
+        ("2027F EBITDA",fmt억(ebitda_p[1])),
+        ("2028F EBITDA",fmt억(ebitda_p[2])),
+        ("2029F EBITDA",fmt억(ebitda_p[3])),
+        ("2030F EBITDA",fmt억(ebitda_p[4])),
+        ("─────","──────────"),
+        ("판정","✅ 투자가치 있음" if npv_val>0 else "⚠️ NPV 음수, 조건부 검토"),
     ])
     kpi_card(k[2], "누적EBITDA", fmt억(cum_ebitda[-1]), [
-        ("정의","5년 EBITDA 누적"),
-        ("산식","영업이익 + 감가상각비"),
-        ("의미","실질 현금창출 능력"),
+        ("정의","5년간 EBITDA(영업이익+감가상각비) 누적"),
+        ("─────","──────────"),
+        ("2026F",fmt억(cum_ebitda[0])),
+        ("2027F",fmt억(cum_ebitda[1])),
+        ("2028F",fmt억(cum_ebitda[2])),
+        ("2029F",fmt억(cum_ebitda[3])),
+        ("2030F",fmt억(cum_ebitda[4])),
+        ("─────","──────────"),
+        ("투자금 대비",f"{cum_ebitda[-1]/inv_won*100:.1f}%"),
     ])
     kpi_card(k[3], "회수율", f"{rec_rate[-1]*100:.1f}%", [
-        ("정의","투자금 회수 비율"),
-        ("산식","누적EBITDA ÷ 투자금"),
-        ("회수",f"{rec_rate[-1]*100:.1f}%"),
-        ("미회수",f"{(1-rec_rate[-1])*100:.1f}%"),
+        ("정의","누적EBITDA ÷ 투자금 × 100"),
+        ("─────","──────────"),
+        ("2026F",f"{rec_rate[0]*100:.1f}%"),
+        ("2027F",f"{rec_rate[1]*100:.1f}%"),
+        ("2028F",f"{rec_rate[2]*100:.1f}%"),
+        ("2029F",f"{rec_rate[3]*100:.1f}%"),
+        ("2030F",f"{rec_rate[4]*100:.1f}%"),
+        ("─────","──────────"),
+        ("미회수금",fmt억(inv_won - cum_ebitda[-1]) if cum_ebitda[-1] < inv_won else "전액 회수"),
     ])
     kpi_card(k[4], "IRR", f"{irr_val*100:.1f}%", [
-        ("정의","내부수익률"),
-        ("할인율",f"{disc_r*100:.0f}%"),
-        ("IRR",f"{irr_val*100:.1f}%"),
-        ("판정","양호" if irr_val > disc_r else "미달"),
+        ("정의","투자수익률 (내부수익률)"),
+        ("의미","NPV=0이 되는 할인율"),
+        ("─────","──────────"),
+        ("현재 IRR",f"{irr_val*100:.1f}%"),
+        ("할인율(WACC)",f"{disc_r*100:.0f}% (무위험3~4%+리스크3~4%+유동성2~3%)"),
+        ("─────","──────────"),
+        ("판정","✅ IRR > 할인율 → 은행보다 수익 우수" if irr_val > disc_r else "⚠️ IRR < 할인율 → 은행 예금이 나을 수 있음"),
+        ("참고","은행이자 3~4%가 아닌 10%를 기준으로 삼는 이유: 사업 리스크와 자금 묶임(유동성)을 감안한 기회비용"),
     ])
     kpi_card(k[5], "BEP매출", fmt억(bep_revenue), [
-        ("정의","손익분기 매출"),
-        ("산식","고정비 ÷ (1-변동비율)"),
-        ("의미","이 이상 매출 시 흑자"),
+        ("정의","손익분기점 매출액"),
+        ("산식","고정비 ÷ (1 - 변동비율)"),
+        ("─────","──────────"),
+        ("2027F 매출",fmt억(rev_p[1])),
+        ("BEP 매출",fmt억(bep_revenue)),
+        ("안전마진",f"{(rev_p[1]-bep_revenue)/rev_p[1]*100:.1f}%" if rev_p[1] else "N/A"),
+        ("─────","──────────"),
+        ("의미","이 금액 이상 매출 시 흑자"),
     ])
     kpi_card(k[6], "Payback", f"{payback:.1f}년" if payback else "5년+", [
-        ("정의","투자금 회수 기간"),
-        ("기준","5년 이내 권장"),
-        ("현재",f"{payback:.1f}년" if payback else "5년 초과"),
+        ("정의","투자금 전액 회수 소요 기간"),
+        ("투자금",f"{s_inv}억"),
+        ("─────","──────────"),
+        ("1년차 누적",fmt억(cum_ebitda[0])),
+        ("2년차 누적",fmt억(cum_ebitda[1])),
+        ("3년차 누적",fmt억(cum_ebitda[2])),
+        ("4년차 누적",fmt억(cum_ebitda[3])),
+        ("5년차 누적",fmt억(cum_ebitda[4])),
+        ("─────","──────────"),
+        ("판정",f"✅ {payback:.1f}년 회수" if payback else "⚠️ 5년 내 미회수"),
     ])
+
+    st.markdown("<div style='margin:20px 0;'></div>", unsafe_allow_html=True)
 
     if npv_val > 0:
         st.success("**투자적합** — NPV 양수, 할인율 기준 투자 수익 확보")
@@ -1320,18 +1456,19 @@ if _ti == 0:
     else:
         st.error("**신중검토 필요** — NPV 음수, 투자회수율 미흡")
 
+    st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
     sec("📊", "주요 대시보드")
 
     # ── 경영진 핵심 지표 (표+그래프 혼합형) ──
     subsec("경영진 핵심 지표")
     info("사업성 판단에 가장 중요한 운영·재무 지표를 표와 그래프로 한눈에 보여줍니다. (2026F = 오픈 첫해 기준)")
 
-    # 계산 (2026F = index 0 기준)
+    # 계산 (2026F = index 0 기준, 컨트롤 패널 연동)
     rev_26 = rev_p[0]
     cost_26 = cost_p[0]
-    labor_26 = D['cost_items']['인건비'][0]
-    energy_26 = D['cost_items']['전력비'][0] + D['cost_items']['수도광열비'][0]
-    rev_per_bay = rev_26 / s_bays / 12 if s_bays else 0
+    labor_26 = monthly_labor * 만 * 9  # 컨트롤 패널 인건비 × 9개월
+    energy_26 = (op_electric + op_water) * 만 * 9  # 컨트롤 패널 전기+수도 × 9개월
+    rev_per_bay_monthly = rev_26 / s_bays / 9 if s_bays else 0  # 9개월 기준 월평균
     labor_pct = labor_26 / cost_26 * 100 if cost_26 else 0
     energy_pct = energy_26 / cost_26 * 100 if cost_26 else 0
     dep_yr = dep[0] if dep else 0
@@ -1340,7 +1477,9 @@ if _ti == 0:
     total_members_yr = m_1m + m_3m + m_6m + m_coupon + m_daily
     avg_price = custom_total_rev / total_members_yr if total_members_yr else 0
     monthly_fcf = (ebitda_p[0] - ebitda_p[0]*s_tax_rate) / 12
-    dscr = ebitda_p[0] / (inv_won * 0.2) if inv_won else 0
+    # DSCR: 차입금이 없으면 N/A (현재 모델은 전액 자기자본 가정)
+    _has_loan = False  # 차입 구조가 추가되면 True로 변경
+    dscr = ebitda_p[0] / (inv_won * 0.2) if inv_won and _has_loan else 0
     growth_27 = ((rev_p[1]/rev_p[0])-1)*100 if len(rev_p)>1 and rev_p[0] else 0
 
     # ── 좌: 핵심 지표 테이블 / 우: 비용구조 도넛 + 수익성 게이지 ──
@@ -1358,35 +1497,54 @@ if _ti == 0:
                 elif val <= bad_thr: return '<span style="background:#854d0e;color:#fde047;padding:2px 8px;border-radius:6px;font-size:11px;">주의</span>'
                 else: return '<span style="background:#991b1b;color:#fca5a5;padding:2px 8px;border-radius:6px;font-size:11px;">위험</span>'
 
+        _disc_tip = f'할인율 {disc_r*100:.0f}% = 무위험수익률(은행 3~4%) + 사업리스크(3~4%) + 유동성프리미엄(2~3%)'
+        # (지표명, 값, 배지, 짧은설명, 팝업상세)
         kpi_rows = [
-            ('투자금', f'{inv_won/억:.0f}억', '', '총 투자금 규모'),
-            ('NPV (5년)', f'{npv_val/억:.1f}억', _badge(npv_val, 0, -5*억, True), '할인율 적용 순현재가치'),
-            ('IRR', f'{irr_val*100:.1f}%', _badge(irr_val*100, 12, 8, True), '투자수익률, 할인율 이상이면 양호'),
-            ('투자회수율', f'{rec_rate[-1]*100:.1f}%', _badge(rec_rate[-1]*100, 100, 70, True), '5년 누적 EBITDA ÷ 투자금'),
-            ('Payback', f'{"5년+" if rec_rate[-1]<1 else "5년 이내"}', _badge(rec_rate[-1]*100, 100, 70, True), '투자금 회수까지 소요 기간'),
-            ('타석당 월매출', f'{rev_per_bay/만:.0f}만원', _badge(rev_per_bay/만, 20, 15, True), f'{s_bays}타석 ÷ 12개월 기준'),
-            ('연간 이용객', f'{total_members_yr:,}명', '', '회원수 가정 합계'),
-            ('평균 객단가', f'{avg_price/만:.1f}만원', '', '총매출 ÷ 총이용객'),
-            ('인건비율', f'{labor_pct:.1f}%', _badge(labor_pct, 25, 35, False), '총비용 대비 인건비 (25% 이하 권장)'),
-            ('에너지비율', f'{energy_pct:.1f}%', _badge(energy_pct, 10, 15, False), '전기+수도 비율'),
-            ('고정비율', f'{fixed_pct:.1f}%', _badge(fixed_pct, 50, 65, False), '인건비+감가상각 비율'),
-            ('연매출 성장률', f'{growth_27:+.1f}%', _badge(growth_27, 2, 0, True), '2027F vs 2026F'),
-            ('월 순현금흐름', f'{monthly_fcf/만:,.0f}만원', _badge(monthly_fcf, 0, -500*만, True), 'EBITDA×(1-세율)÷12'),
-            ('DSCR', f'{dscr:.2f}배', _badge(dscr, 1.2, 1.0, True), '원리금상환배율, 1.2배↑ 안전'),
+            ('투자금', f'{inv_won/억:.0f}억', '', '총 투자금', '사업 시작에 필요한 총 투자금액. 시설공사, 장비, 인테리어, 운전자금 등 포함'),
+            ('NPV', f'{npv_val/억:.1f}억', _badge(npv_val, 0, -5*억, True), '순현재가치', f'세후 현금흐름을 할인율({disc_r*100:.0f}%)로 현재가치 환산 후 합계 - 투자금. 양수면 투자가치 있음. {_disc_tip}'),
+            ('IRR', f'{irr_val*100:.1f}%', _badge(irr_val*100, 12, 8, True), '내부수익률', f'NPV=0이 되는 할인율. 할인율({disc_r*100:.0f}%)보다 높으면 투자 적합. {_disc_tip}'),
+            ('회수율', f'{rec_rate[-1]*100:.1f}%', _badge(rec_rate[-1]*100, 100, 70, True), 'EBITDA ÷ 투자금', '5년간 누적 EBITDA를 투자금으로 나눈 비율. 100% 이상이면 투자금 전액 회수'),
+            ('Payback', f'{"5년+" if rec_rate[-1]<1 else "5년 이내"}', _badge(rec_rate[-1]*100, 100, 70, True), '회수기간', '투자금을 회수하는 데 걸리는 기간. 5년 이내가 양호'),
+            ('타석당 월매출', f'{rev_per_bay_monthly/만:.0f}만', _badge(rev_per_bay_monthly/만, 20, 15, True), f'{s_bays}타석 기준', f'2026F 매출 ÷ {s_bays}타석 ÷ 9개월. 타석 1개가 월 얼마의 매출을 만드는지'),
+            ('이용객', f'{total_members_yr:,}명', '', '연간 합계', '컨트롤 패널에서 설정한 회원수 가정의 합계 (일일+쿠폰+1/3/6개월)'),
+            ('객단가', f'{avg_price/만:.1f}만', '', '매출 ÷ 이용객', '1인당 평균 지출 금액. 총매출을 총이용객수로 나눈 값'),
+            ('인건비율', f'{labor_pct:.1f}%', _badge(labor_pct, 25, 35, False), '25%↓ 권장', '총비용 중 인건비가 차지하는 비율. 골프연습장 업계 평균 25% 이하가 건전'),
+            ('에너지비', f'{energy_pct:.1f}%', _badge(energy_pct, 10, 15, False), '전기+수도', '전력비+수도광열비가 총비용에서 차지하는 비율'),
+            ('고정비율', f'{fixed_pct:.1f}%', _badge(fixed_pct, 50, 65, False), '인건비+감가', '매출과 무관하게 발생하는 고정비(인건비+감가상각) 비율. 높을수록 BEP 매출이 높아짐'),
+            ('성장률', f'{growth_27:+.1f}%', _badge(growth_27, 2, 0, True), '2027 vs 2026', '정상가동 첫해(2027) 매출이 오픈년(2026) 대비 얼마나 성장하는지'),
+            ('월 현금흐름', f'{monthly_fcf/만:,.0f}만', _badge(monthly_fcf, 0, -500*만, True), '세후 월 FCF', 'EBITDA에서 법인세를 차감한 후 12개월로 나눈 월간 순현금흐름'),
+            ('DSCR', 'N/A' if not _has_loan else f'{dscr:.2f}배', '' if not _has_loan else _badge(dscr, 1.2, 1.0, True), '차입없음' if not _has_loan else '상환배율', '전액 자기자본 투자 가정. 차입 시 EBITDA ÷ 연간원리금상환액으로 산출, 1.2배↑ 안전'),
         ]
 
-        t_html = '<table style="width:100%;border-collapse:collapse;font-size:13px;">'
-        t_html += '<tr><th style="background:#1e293b;color:#60a5fa;padding:10px 12px;text-align:left;border-bottom:2px solid #334155;">지표</th>'
-        t_html += '<th style="background:#1e293b;color:#60a5fa;padding:10px;text-align:right;border-bottom:2px solid #334155;">값</th>'
-        t_html += '<th style="background:#1e293b;color:#60a5fa;padding:10px;text-align:center;border-bottom:2px solid #334155;">판정</th>'
-        t_html += '<th style="background:#1e293b;color:#60a5fa;padding:10px;text-align:left;border-bottom:2px solid #334155;">설명</th></tr>'
-        for i, (name, val, badge, desc) in enumerate(kpi_rows):
-            bg = '#111827' if i % 2 == 0 else '#0f172a'
-            t_html += f'<tr><td style="background:{bg};color:#e2e8f0;padding:8px 12px;font-weight:600;border-bottom:1px solid #1e293b;">{name}</td>'
-            t_html += f'<td style="background:{bg};color:#f8fafc;padding:8px 12px;text-align:right;font-weight:700;font-size:14px;border-bottom:1px solid #1e293b;">{val}</td>'
-            t_html += f'<td style="background:{bg};padding:8px;text-align:center;border-bottom:1px solid #1e293b;">{badge}</td>'
-            t_html += f'<td style="background:{bg};color:#94a3b8;padding:8px 12px;font-size:11px;border-bottom:1px solid #1e293b;">{desc}</td></tr>'
-        t_html += '</table>'
+        # KPI 테이블 — 호버 팝업 + 수직 중앙 + 배지 가로
+        st.markdown("""<style>
+.kpi-row { display:grid; grid-template-columns:18% 16% 10% 56%; border-bottom:1px solid #1e293b; align-items:center; }
+.kpi-row:hover { background:#1e293b !important; }
+.kpi-hdr { display:grid; grid-template-columns:18% 16% 10% 56%; background:#1e293b; border-radius:10px 10px 0 0; border-bottom:2px solid #334155; }
+.kpi-hdr > div { color:#60a5fa; font-size:12px; font-weight:700; padding:10px 14px; }
+.kpi-cell { padding:10px 14px; }
+.kpi-name { color:#e2e8f0; font-weight:700; font-size:13px; }
+.kpi-val { color:#f8fafc; font-weight:800; font-size:16px; text-align:right; }
+.kpi-badge { text-align:center; }
+.kpi-desc { position:relative; cursor:help; }
+.kpi-desc-text { color:#94a3b8; font-size:12px; border-bottom:1px dotted #475569; }
+.kpi-popup { display:none; position:absolute; bottom:120%; left:0; width:300px; z-index:999;
+    background:#0f172a; border:1px solid #334155; border-radius:10px; padding:14px;
+    box-shadow:0 8px 24px rgba(0,0,0,0.6); font-size:11px; line-height:1.7; color:#cbd5e1; }
+.kpi-desc:hover .kpi-popup { display:block; }
+</style>""", unsafe_allow_html=True)
+
+        t_html = '<div style="border:1px solid #1e293b;border-radius:10px;overflow:hidden;">'
+        t_html += '<div class="kpi-hdr"><div>지표</div><div style="text-align:right;">값</div><div style="text-align:center;">상태</div><div>설명</div></div>'
+        for i, (name, val, badge, short_desc, popup_desc) in enumerate(kpi_rows):
+            bg = '#111827' if i % 2 == 0 else '#0d1117'
+            t_html += f'<div class="kpi-row" style="background:{bg};">'
+            t_html += f'<div class="kpi-cell kpi-name">{name}</div>'
+            t_html += f'<div class="kpi-cell kpi-val">{val}</div>'
+            t_html += f'<div class="kpi-cell kpi-badge">{badge}</div>'
+            t_html += f'<div class="kpi-cell kpi-desc"><span class="kpi-desc-text">{short_desc}</span><div class="kpi-popup"><b style="color:#60a5fa;">{name}</b><br>{popup_desc}</div></div>'
+            t_html += '</div>'
+        t_html += '</div>'
         st.markdown(t_html, unsafe_allow_html=True)
 
     with col_r:
@@ -1401,7 +1559,7 @@ if _ti == 0:
             hovertemplate='%{label}: %{value:.1f}%<extra></extra>'))
         fig_donut.add_annotation(text="비용<br>구조", x=0.5, y=0.5, font_size=14, font_color='#94a3b8', showarrow=False)
         lo(fig_donut, title='2026F 비용 구조', height=240, margin=dict(t=40, b=10, l=10, r=10), showlegend=False)
-        st.plotly_chart(fig_donut, use_container_width=True)
+        st.plotly_chart(fig_donut, use_container_width=True, key="pc_1")
 
         # 투자회수 게이지
         fig_gauge = go.Figure(go.Indicator(
@@ -1418,7 +1576,7 @@ if _ti == 0:
                 'threshold': {'line': {'color': C['red'], 'width': 3}, 'value': 100}},
             title={'text': '5년 투자회수율', 'font': {'size': 13, 'color': '#94a3b8'}}))
         lo(fig_gauge, height=200, margin=dict(t=30, b=5, l=20, r=20))
-        st.plotly_chart(fig_gauge, use_container_width=True)
+        st.plotly_chart(fig_gauge, use_container_width=True, key="pc_2")
 
     # ═══ 차트 공통 설정 (대시보드 전용) ═══
     _M = dict(t=45, b=30, l=15, r=15)  # 여백 통일
@@ -1430,29 +1588,29 @@ if _ti == 0:
     with c1:
         info("파란 막대(매출)가 빨간 막대(비용)보다 높으면 흑자")
         fig = go.Figure()
-        fig.add_trace(go.Bar(name='매출', x=D['yp'], y=[v/억 for v in rev_p], marker_color=C['blue'],
+        fig.add_trace(go.Bar(name='매출', x=[str(y) for y in D['yp']], y=[v/억 for v in rev_p], marker_color=C['blue'],
             text=[f"{v/억:.1f}" for v in rev_p], textposition='inside', textfont=dict(size=13, color='white')))
-        fig.add_trace(go.Bar(name='비용', x=D['yp'], y=[v/억 for v in cost_p], marker_color=C['red'],
+        fig.add_trace(go.Bar(name='비용', x=[str(y) for y in D['yp']], y=[v/억 for v in cost_p], marker_color=C['red'],
             text=[f"{v/억:.1f}" for v in cost_p], textposition='inside', textfont=dict(size=13, color='white')))
-        fig.add_trace(go.Scatter(name='영업이익', x=D['yp'], y=[v/억 for v in op_p],
+        fig.add_trace(go.Scatter(name='영업이익', x=[str(y) for y in D['yp']], y=[v/억 for v in op_p],
             mode='lines+markers', line=dict(color=C['green'], width=3), marker=dict(size=10, symbol='diamond'),
             hovertemplate='%{x}: %{y:.1f}억<extra>영업이익</extra>'))
         fig.add_hline(y=0, line_dash="dash", line_color="#475569", line_width=1)
         lo(fig, title='매출 vs 비용 (억원) — 초록선: 영업이익', barmode='group', height=_H, yaxis_title='억원', margin=_M)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="pc_3")
     with c2:
         info("주황 누적선이 빨간 점선(투자금)을 넘으면 회수 완료")
         fig2 = go.Figure()
-        fig2.add_trace(go.Bar(name='EBITDA', x=D['yp'], y=[e/억 for e in ebitda_p],
+        fig2.add_trace(go.Bar(name='EBITDA', x=[str(y) for y in D['yp']], y=[e/억 for e in ebitda_p],
             marker_color=[C['red'] if e<0 else '#22c55e' for e in ebitda_p],
             text=[f"{e/억:.1f}" for e in ebitda_p], textposition='inside', textfont=dict(size=13, color='white')))
-        fig2.add_trace(go.Scatter(name='누적 EBITDA', x=D['yp'], y=[c/억 for c in cum_ebitda],
+        fig2.add_trace(go.Scatter(name='누적 EBITDA', x=[str(y) for y in D['yp']], y=[c/억 for c in cum_ebitda],
             mode='lines+markers', line=dict(color=C['orange'], width=3), marker=dict(size=10),
             hovertemplate='%{x}: %{y:.1f}억<extra>누적</extra>'))
         fig2.add_hline(y=inv_won/억, line_dash="dash", line_color=C['red'], line_width=2,
             annotation_text=f"투자금 {inv_won/억:.0f}억", annotation_font_size=12, annotation_font_color=C['red'])
         lo(fig2, title='EBITDA 및 투자회수 (억원)', height=_H, yaxis_title='억원', margin=_M)
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, use_container_width=True, key="pc_4")
 
     # ── ROW 2: 수익성 + 매출구성 ──
     c1, c2 = st.columns(2)
@@ -1460,17 +1618,17 @@ if _ti == 0:
         subsec("수익성 추이")
         info("양(+)이면 흑자 구간. 값이 클수록 수익성 우수")
         fig_m = go.Figure()
-        fig_m.add_trace(go.Bar(name='영업이익률', x=D['yp'], y=margins,
+        fig_m.add_trace(go.Bar(name='영업이익률', x=[str(y) for y in D['yp']], y=margins,
             marker_color=['#be185d' if m<0 else '#ec4899' for m in margins],
             text=[f"{m:.1f}" for m in margins], textposition='auto',
             textfont=dict(size=12, color='white'), hovertemplate='%{x}: %{y:.1f}%<extra>영업이익률</extra>'))
-        fig_m.add_trace(go.Bar(name='EBITDA이익률', x=D['yp'], y=em,
+        fig_m.add_trace(go.Bar(name='EBITDA이익률', x=[str(y) for y in D['yp']], y=em,
             marker_color=[C['purple'] if m>0 else '#581c87' for m in em],
             text=[f"{m:.1f}" for m in em], textposition='auto',
             textfont=dict(size=12, color='white'), hovertemplate='%{x}: %{y:.1f}%<extra>EBITDA이익률</extra>'))
         fig_m.add_hline(y=0, line_dash="dash", line_color="#475569")
         lo(fig_m, title='영업이익률 vs EBITDA이익률 (%)', barmode='group', height=_H, yaxis_title='%', margin=_M)
-        st.plotly_chart(fig_m, use_container_width=True)
+        st.plotly_chart(fig_m, use_container_width=True, key="pc_5")
     with c2:
         subsec("2026F 매출 구성 (컨트롤 패널 기준)")
         info("컨트롤 패널에서 설정한 회원수×단가 기반 상품별 매출 비중")
@@ -1487,13 +1645,13 @@ if _ti == 0:
         fig_pie.add_annotation(text="매출<br>구성", x=0.5, y=0.5, font_size=16, font_color='#94a3b8', showarrow=False)
         lo(fig_pie, height=_H, margin=dict(t=20, b=20, l=20, r=20), showlegend=True,
            legend=dict(font=dict(size=11), x=0, y=-0.15, orientation='h'))
-        st.plotly_chart(fig_pie, use_container_width=True)
+        st.plotly_chart(fig_pie, use_container_width=True, key="pc_6")
 
     # ── ROW 3: 투자회수 워터폴 + 비용 상세 ──
     c1, c2 = st.columns(2)
     with c1:
         subsec("투자금 회수 워터폴")
-        info("투자금(-20억)에서 시작, 매년 EBITDA가 누적되어 잔여 부족분이 줄어듭니다")
+        info(f"투자금(-{s_inv}억)에서 시작, 매년 EBITDA가 누적되어 잔여 부족분이 줄어듭니다")
         wf_x = ['투자금'] + [y.replace('F','') for y in D['yp']] + ['잔여']
         wf_y = [-inv_won/억] + [e/억 for e in ebitda_p] + [0]
         wf_m = ['absolute'] + ['relative']*5 + ['total']
@@ -1505,39 +1663,82 @@ if _ti == 0:
             textposition='inside', textfont=dict(size=12, color='#e2e8f0'),
             text=[f"{v:.1f}" for v in wf_y]))
         lo(fig_wf, title='투자금 회수 과정 (억원)', height=_H, yaxis_title='억원', margin=_M)
-        st.plotly_chart(fig_wf, use_container_width=True)
+        st.plotly_chart(fig_wf, use_container_width=True, key="pc_7")
     with c2:
         subsec("2026F 비용 구조 순위")
-        info("비용 항목을 크기순으로 정렬. 인건비가 가장 큰 비중")
+        info("비용 항목을 크기순으로 정렬. 각 막대에 마우스를 올리면 상세 내역이 표시됩니다.")
         cost_names = list(D['cost_items'].keys())
         cost_26_vals = [D['cost_items'][k][0]/억 for k in cost_names]
+
+        # 각 항목별 상세 설명
+        _cost_details = {
+            '인건비': f'대표 1명, 총무 1명, 경리 1명, 시설 3명, 안내 3명<br>월 급여 합계: {monthly_labor*만/1e6:.1f}백만 × 9개월<br>4대보험 {s_insurance}% 별도',
+            '수도광열비': f'월 {op_water}만 × 9개월<br>계절별 변동 있음 (동계 난방비 증가)',
+            '전력비': f'월 {op_electric}만 × 9개월<br>88타석 조명 + 볼머신 + 냉난방<br>전기료 인상률 반영',
+            '세금과공과': f'월 {op_tax}만 × 9개월<br>재산세, 종합토지세, 환경부담금 등<br>연간 고정 발생',
+            '감가상각비': f'정액법: {dep_straight_amt*만/1e4:,.0f}만/년<br>정률법: {dep_declining_amt*만/1e4:,.0f}만/년 (체감)<br>내용연수: {s_useful}년',
+            '보험료': f'월 {op_insurance}만 × 9개월<br>화재보험, 시설배상책임보험, 상해보험 등',
+            '소모품비': f'월 {op_supplies}만 × 9개월<br>골프공, 매트, 티 등 소모품<br>이용객 수에 비례 (변동비)',
+            '카드수수료': f'매출의 {op_card_fee*100:.1f}%<br>2026F 매출 {rev_p[0]/억:.1f}억 기준<br>연 {rev_p[0]*op_card_fee/억:.2f}억',
+            '수선비+용역비+기타': f'수선비: 월 {op_maint}만<br>용역비: 월 {op_outsource}만<br>기타: 월 {op_etc}만<br>마케팅: 월 {op_marketing}만',
+        }
+
         sorted_pairs = sorted(zip(cost_names, cost_26_vals), key=lambda x: x[1])
+        details = [_cost_details.get(p[0], '') for p in sorted_pairs]
         bar_colors = ['#64748b','#94a3b8','#a855f7','#06b6d4','#eab308','#f97316','#ec4899','#22c55e','#3b82f6']
+
         fig_bar = go.Figure(go.Bar(
             y=[p[0] for p in sorted_pairs], x=[p[1] for p in sorted_pairs], orientation='h',
             marker_color=bar_colors[:len(sorted_pairs)],
             text=[f"{p[1]:.2f}억" for p in sorted_pairs], textposition='auto',
             textfont=dict(size=12, color='#e2e8f0'),
-            hovertemplate='%{y}: %{x:.2f}억원<extra></extra>'))
+            customdata=[[d] for d in details],
+            hovertemplate='<b>%{y}</b>: %{x:.2f}억원<br><br>%{customdata[0]}<extra></extra>'))
         lo(fig_bar, title='비용 항목 순위 (2026F, 억원)', height=_H, xaxis_title='억원', margin=dict(t=45, b=30, l=110, r=40))
-        st.plotly_chart(fig_bar, use_container_width=True)
+        fig_bar.update_layout(hoverlabel=dict(bgcolor="#0f172a", bordercolor="#334155", font=dict(size=12, color="#e2e8f0")))
+        st.plotly_chart(fig_bar, use_container_width=True, key="pc_8")
+
+        # 비용 항목별 상세 내역 (커서 호버 팝업)
+        _cd = {
+            '인건비': f'대표 1명 · 총무 1명 · 경리 1명 · 시설 3명 · 안내 3명<br>월 급여 합계 {monthly_labor*만/1e6:.1f}백만 × 9개월 + 4대보험 {s_insurance}%',
+            '감가상각비': f'정액법 {dep_straight_amt*만/1e4:,.0f}만/년 + 정률법 {dep_declining_amt*만/1e4:,.0f}만/년<br>내용연수 {s_useful}년 · 현금유출 없는 장부비용',
+            '세금과공과': f'월 {op_tax}만 × 9개월 = {op_tax*9/1e4:.2f}억<br>재산세 · 종합토지세 · 환경부담금 등',
+            '전력비': f'월 {op_electric}만 × 9개월 = {op_electric*9/1e4:.2f}억<br>88타석 조명 · 볼머신 · 냉난방 전력',
+            '수도광열비': f'월 {op_water}만 × 9개월 = {op_water*9/1e4:.2f}억<br>계절별 변동 (동계 난방비 증가)',
+            '보험료': f'월 {op_insurance}만 × 9개월 = {op_insurance*9/1e4:.2f}억<br>화재 · 시설배상책임 · 상해보험',
+            '소모품비': f'월 {op_supplies}만 × 9개월 = {op_supplies*9/1e4:.2f}억<br>골프공 · 매트 · 티 (이용객 비례 변동비)',
+            '카드수수료': f'매출의 {op_card_fee*100:.1f}% = 연 {rev_p[0]*op_card_fee/억:.2f}억<br>카드결제 비율에 비례',
+            '수선비+용역비+기타': f'수선 {op_maint}만 + 용역 {op_outsource}만 + 기타 {op_etc}만 + 마케팅 {op_marketing}만<br>월 합계 {op_maint+op_outsource+op_etc+op_marketing}만 × 9개월',
+        }
+        _pop_css = """<style>
+.cost-tip{position:relative;cursor:help;display:inline-block;border-bottom:1px dotted #475569;color:#e2e8f0;font-weight:600;font-size:12px;}
+.cost-tip .cost-pop{display:none;position:absolute;bottom:120%;left:0;width:280px;z-index:999;
+background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px;
+box-shadow:0 6px 20px rgba(0,0,0,0.5);font-size:11px;line-height:1.6;color:#cbd5e1;font-weight:400;}
+.cost-tip:hover .cost-pop{display:block;}
+.cost-pop b{color:#60a5fa;}
+</style>"""
+        _pop_html = _pop_css + '<div style="display:flex;flex-wrap:wrap;gap:6px 12px;margin-top:8px;">'
+        for name in [p[0] for p in sorted(sorted_pairs, key=lambda x: -x[1])]:
+            detail = _cd.get(name, '')
+            val = next((p[1] for p in sorted_pairs if p[0]==name), 0)
+            _pop_html += f'<span class="cost-tip">{name} ({val:.2f}억)<span class="cost-pop"><b>{name}</b><br>{detail}</span></span>'
+        _pop_html += '</div>'
+        st.markdown(_pop_html, unsafe_allow_html=True)
 
     # ── ROW 4: 월별 매출 vs 비용 + 시즌 가중치 ──
     c1, c2 = st.columns(2)
     with c1:
-        subsec("2026 월별 매출 vs 비용 (현실 보정)")
-        info("6월=오픈(장마) → 7~8월=폭염 → 9~10월=성수기 → 11~2월=비수기. 비용은 고정비 위주라 매출과 무관하게 발생")
-        monthly_adj = [0.35, 0.40, 0.50, 0.75, 0.90, 0.55, 0.45, 0.40, 0.50]
-        cost_adj_m = [0.90, 0.95, 0.95, 1.0, 1.0, 1.0, 1.0, 1.0, 0.95]
-        adj_mrev = [int(v * a) for v, a in zip(mrev_custom, monthly_adj)]
-        adj_mcost = [int(v * a) for v, a in zip(mcost_custom, cost_adj_m)]
+        subsec("2026 월별 매출 vs 비용 (컨트롤패널 연동)")
+        info("시즌가중치 × 오픈 램프업 × 상권보정 × 경제보정이 적용된 월별 추정입니다. 비용은 고정비 위주라 월별 균등 발생합니다.")
+        # mrev_custom은 이미 시즌×램프업×상권×경제 보정 적용됨 (이중 적용 방지)
         fig_mon = go.Figure()
-        fig_mon.add_trace(go.Bar(name='매출', x=D['months'], y=[v/1e6 for v in adj_mrev], marker_color=C['blue'],
-            text=[f"{v/1e6:.0f}" for v in adj_mrev], textposition='inside', textfont=dict(size=12, color='white')))
-        fig_mon.add_trace(go.Bar(name='비용', x=D['months'], y=[v/1e6 for v in adj_mcost], marker_color=C['red'],
-            text=[f"{v/1e6:.0f}" for v in adj_mcost], textposition='inside', textfont=dict(size=12, color='white')))
+        fig_mon.add_trace(go.Bar(name='매출', x=D['months'], y=[v/1e6 for v in mrev_custom], marker_color=C['blue'],
+            text=[f"{v/1e6:.0f}" for v in mrev_custom], textposition='inside', textfont=dict(size=12, color='white')))
+        fig_mon.add_trace(go.Bar(name='비용', x=D['months'], y=[v/1e6 for v in mcost_custom], marker_color=C['red'],
+            text=[f"{v/1e6:.0f}" for v in mcost_custom], textposition='inside', textfont=dict(size=12, color='white')))
         lo(fig_mon, title='월별 매출 vs 비용 (백만원)', barmode='group', height=_H, yaxis_title='백만원', margin=_M)
-        st.plotly_chart(fig_mon, use_container_width=True)
+        st.plotly_chart(fig_mon, use_container_width=True, key="pc_9")
     with c2:
         subsec("시즌성 가중치")
         info("1.0=성수기 기준. 빨강(0.6↓)=심각한 비수기, 주황(0.9↓)=비수기, 초록=성수기")
@@ -1551,7 +1752,7 @@ if _ti == 0:
             annotation_xanchor='left', annotation_x=0)
         lo(fig_sw, title='월별 시즌 가중치', height=_H, yaxis_title='가중치',
            yaxis_range=[0, max(sw)*1.15 if sw else 1.5], margin=_M)
-        st.plotly_chart(fig_sw, use_container_width=True)
+        st.plotly_chart(fig_sw, use_container_width=True, key="pc_10")
 
     # ── 5개년 요약 테이블 ──
     subsec("5개년 손익 요약")
@@ -1622,7 +1823,7 @@ if _ti == 1:
         info("3개 시나리오의 5개년 매출을 비교합니다.")
         fig = go.Figure()
         for name, color in [('최하', C['red']), ('기본', C['blue']), ('최상', C['green'])]:
-            fig.add_trace(go.Bar(name=name, x=D['yp'], y=[r/억 for r in scenarios[name]['rev']], marker_color=color))
+            fig.add_trace(go.Bar(name=name, x=[str(y) for y in D['yp']], y=[r/억 for r in scenarios[name]['rev']], marker_color=color))
         lo(fig, title='시나리오별 매출 비교 (억원)', barmode='group', height=440, yaxis_title='억원')
         st.plotly_chart(fig)
     with c2:
@@ -1630,7 +1831,7 @@ if _ti == 1:
         info("투자금 회수 시점을 시나리오별로 비교합니다. 빨간 점선은 투자금입니다.")
         fig = go.Figure()
         for name, color in [('최하', C['red']), ('기본', C['blue']), ('최상', C['green'])]:
-            fig.add_trace(go.Scatter(name=name, x=D['yp'], y=[c/억 for c in scenarios[name]['cum']], mode='lines+markers', line=dict(color=color, width=3)))
+            fig.add_trace(go.Scatter(name=name, x=[str(y) for y in D['yp']], y=[c/억 for c in scenarios[name]['cum']], mode='lines+markers', line=dict(color=color, width=3)))
         fig.add_hline(y=s_inv, line_dash="dash", line_color="#94a3b8", annotation_text=f"투자금 {s_inv}억", annotation_font_size=11)
         lo(fig, title='시나리오별 누적 EBITDA (억원)', height=440, yaxis_title='억원')
         st.plotly_chart(fig)
@@ -1803,7 +2004,7 @@ if _ti == 2:
                 fig.add_annotation(text="2018~2021<br>평균", x=0.5, y=0.5, font_size=14, font_color='#94a3b8', showarrow=False)
                 lo(fig, title='유형별 이익 비중 (2018~2021 평균)', height=380,
                    showlegend=True, legend=dict(font=dict(size=11), x=0, y=-0.15, orientation='h'))
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="pc_11")
             with c2:
                 fig = go.Figure()
                 fig.add_trace(go.Bar(name='매출', x=tg['유형'], y=tg['매출']/만, marker_color=C['blue'],
@@ -1813,12 +2014,12 @@ if _ti == 2:
                     text=[f"{v/만:,.0f}" for v in tg['이익']], textposition='inside', textfont=dict(size=12, color='white'),
                     hovertemplate='%{x}<br>이익: %{y:,.0f}만원<extra></extra>'))
                 lo(fig, title='유형별 매출·이익 (2018~2021 평균, 만원)', barmode='group', height=380, yaxis_title='만원')
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="pc_12")
 
             # ── 분석 2: 성별 추정 ──
             st.markdown("---")
             subsec("분석 2 — 성별 이익기여도 (추정)")
-            info("골프연습장 남녀 비율 통계(한국레저산업연구소 2023): 남성 72%, 여성 28%. 여성 요금은 남성 대비 평균 8~10% 저렴합니다. 이를 기반으로 성별 매출·이익 기여도를 추정합니다.")
+            info("골프연습장 남녀 비율 통계(한국레저산업연구소 2023): 남성 72%, 여성 28%. 여성 요금은 남성 대비 평균 8~10% 저렴합니다. 연도별 변화(2018: 76%→2021: 70%)는 여성 골퍼 증가 추세를 반영한 추정치이며, 실제 등촌골프연습장 POS 데이터가 아닙니다.")
 
             # 성별 비율: 골프장 통계 기반 (한국레저산업연구소 2023)
             # 2018~2021 여성 골퍼 비율 증가 추세 반영
@@ -1858,7 +2059,7 @@ if _ti == 2:
                 fig.add_trace(go.Bar(name='여성 매출', x=[str(yr) for yr in years_avail], y=[v/억 for v in g_female_rev],
                     marker_color='#ec4899', text=[f"{v/억:.1f}" for v in g_female_rev], textposition='inside', textfont=dict(size=12, color='white')))
                 lo(fig, title='성별 매출 추이 (억원)', barmode='stack', height=380, yaxis_title='억원')
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="pc_13")
             with c2:
                 f_pcts = [fr/(mr+fr*female_disc)*100 for mr, fr in [gender_ratios.get(yr, (0.72,0.28)) for yr in years_avail]]
                 fig = go.Figure()
@@ -1868,7 +2069,7 @@ if _ti == 2:
                     hovertemplate='%{x}년: %{y:.1f}%<extra>여성 비중</extra>',
                     fill='tozeroy', fillcolor='rgba(236,72,153,0.1)'))
                 lo(fig, title='여성 매출 비중 추이 (%)', height=380, yaxis_title='%')
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="pc_14")
 
             st.markdown(f"""
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0;">
@@ -1933,7 +2134,7 @@ if _ti == 2:
                 fig.add_trace(go.Bar(name='부대수익', x=fix_data['연도'], y=[v/억 for v in fix_data['부대수익']],
                     marker_color=C['slate'], text=[f"{v/억:.1f}" for v in fix_data['부대수익']], textposition='inside', textfont=dict(size=11, color='white')))
                 lo(fig, title='연도별 고정 vs 변동수익 (억원)', barmode='stack', height=380, yaxis_title='억원')
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="pc_15")
             with c2:
                 fig = go.Figure(go.Scatter(x=fix_data['연도'], y=fix_data['고정비중'],
                     mode='lines+markers',
@@ -1943,7 +2144,7 @@ if _ti == 2:
                 fig.add_hline(y=50, line_dash='dash', line_color='#475569',
                     annotation_text='50% 기준선', annotation_font_size=11, annotation_font_color='#94a3b8')
                 lo(fig, title='고정수익 비중 추이 (%)', height=380, yaxis_title='%')
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="pc_16")
 
             # ── 분석 4: 요일·시간대별 이익기여도 추정 ──
             st.markdown("---")
@@ -1973,7 +2174,7 @@ if _ti == 2:
                     customdata=[avg_rev_all*p/100/만 for p in day_pcts]))
                 lo(fig, title='요일별 매출 비중 (2018~2021 평균)', height=380, yaxis_title='비중(%)',
                    yaxis_range=[0, max(day_pcts)*1.3])
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="pc_17")
             with c2:
                 fig = go.Figure(go.Bar(x=time_names, y=time_pcts,
                     marker_color=time_colors,
@@ -1983,7 +2184,7 @@ if _ti == 2:
                     customdata=[avg_rev_all*p/100/만 for p in time_pcts]))
                 lo(fig, title='시간대별 매출 비중 (2018~2021 평균)', height=380, yaxis_title='비중(%)',
                    yaxis_range=[0, max(time_pcts)*1.3])
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="pc_18")
 
             st.markdown("""
 <div style="background:#1e293b;border-radius:12px;padding:16px;margin:8px 0;border-left:4px solid #f97316;">
@@ -2110,7 +2311,7 @@ if _ti == 2:
                         textinfo='label+percent', textfont=dict(size=12, color='white')))
                     fig.add_annotation(text="이익<br>기여도", x=0.5, y=0.5, font_size=14, font_color='#94a3b8', showarrow=False)
                     lo(fig, title='향후 이익 기여도', height=400, showlegend=False)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, key="pc_19")
             with c2:
                 fig = go.Figure()
                 fig.add_trace(go.Bar(name='매출', x=[d['상품'] for d in fd if d['매출']>0], y=[d['매출']/만 for d in fd if d['매출']>0],
@@ -2118,7 +2319,7 @@ if _ti == 2:
                 fig.add_trace(go.Bar(name='이익', x=[d['상품'] for d in fd if d['매출']>0], y=[d['이익']/만 for d in fd if d['매출']>0],
                     marker_color=C['green'], text=[f"{d['이익']/만:,.0f}" for d in fd if d['매출']>0], textposition='inside', textfont=dict(size=12, color='white')))
                 lo(fig, title='향후 매출 vs 이익 (만원)', barmode='group', height=400, yaxis_title='만원')
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="pc_20")
 
             # 상세 테이블
             rdf = pd.DataFrame(fd)
@@ -2151,7 +2352,7 @@ if _ti == 2:
                     marker=dict(colors=['#3b82f6','#22c55e','#a855f7','#f97316','#06b6d4'], line=dict(color='#0a0e1a', width=2)),
                     textinfo='label+percent', textfont=dict(size=12, color='white')))
                 lo(fig, title='유형별 이익 비중', height=380, showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="pc_21")
             with c2:
                 fig = go.Figure()
                 fig.add_trace(go.Bar(name='매출', x=tg['유형'], y=tg['매출']/만, marker_color=C['blue'],
@@ -2159,7 +2360,7 @@ if _ti == 2:
                 fig.add_trace(go.Bar(name='이익', x=tg['유형'], y=tg['이익']/만, marker_color=C['green'],
                     text=[f"{v/만:,.0f}" for v in tg['이익']], textposition='inside', textfont=dict(size=12, color='white')))
                 lo(fig, title='유형별 매출·이익 (만원)', barmode='group', height=380, yaxis_title='만원')
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="pc_22")
 
             st.markdown("---")
 
@@ -2179,7 +2380,7 @@ if _ti == 2:
                     marker=dict(colors=[C['blue'],'#ec4899'], line=dict(color='#0a0e1a', width=2)),
                     textinfo='label+percent', textfont=dict(size=14, color='white')))
                 lo(fig, title='성별 매출 비중', height=300, showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="pc_23")
 
             st.markdown("---")
 
@@ -2206,12 +2407,83 @@ if _ti == 2:
         else:
             info("위 표에 회원수와 단가를 입력하면 과거와 동일한 구조로 이익기여도가 자동 분석됩니다.")
 
+    # ── 이익기여도 기반 가격 전략 (운영전략 탭과 동일 내용) ──
+    subsec("이익기여도 기반 가격 전략")
+    info("2018~2021년 4개년 평균 실적 기반으로 도출한 가격 전략입니다. 상품명에 마우스를 올리면 역산 계산 과정이 표시됩니다. 상세 요금표는 '운영전략' 탭에서 확인할 수 있습니다.")
+
+    st.markdown("""
+<style>
+.prd-tip2 { position:relative; cursor:help; border-bottom:1px dotted #64748b; }
+.prd-tip2 .prd-pop2 {
+    display:none; position:absolute; bottom:130%; left:0; width:320px; z-index:999;
+    background:#0f172a; border:1px solid #334155; border-radius:10px; padding:14px;
+    box-shadow:0 8px 24px rgba(0,0,0,0.5); font-size:11px; line-height:1.7; color:#cbd5e1;
+}
+.prd-tip2:hover .prd-pop2 { display:block; }
+.prd-pop2 b { color:#60a5fa; } .prd-pop2 .val2 { color:#fbbf24; font-weight:700; }
+</style>
+<div style="background:#0f172a;border:1px solid #334155;border-radius:12px;padding:20px;margin:16px 0;">
+<div style="color:#fbbf24;font-size:15px;font-weight:700;margin-bottom:10px;">📊 이익기여도 → 가격 전략 연결</div>
+<div style="background:#1e293b;border-radius:10px;padding:14px;margin-bottom:12px;">
+<table style="width:100%;border-collapse:collapse;font-size:12px;">
+<tr>
+<th style="color:#60a5fa;padding:6px 10px;text-align:left;border-bottom:1px solid #334155;">순위</th>
+<th style="color:#60a5fa;padding:6px;text-align:left;border-bottom:1px solid #334155;">상품</th>
+<th style="color:#60a5fa;padding:6px;text-align:right;border-bottom:1px solid #334155;">1방문당 수익</th>
+<th style="color:#60a5fa;padding:6px;text-align:center;border-bottom:1px solid #334155;">이익기여도</th>
+<th style="color:#60a5fa;padding:6px;text-align:center;border-bottom:1px solid #334155;">할인 전략</th>
+<th style="color:#60a5fa;padding:6px;text-align:left;border-bottom:1px solid #334155;">전략 근거</th>
+</tr>
+<tr><td style="color:#fbbf24;padding:5px 10px;font-weight:700;">1위</td>
+<td style="color:#e2e8f0;padding:5px;"><span class="prd-tip2">일일권<span class="prd-pop2"><b>일일권 (2018~2021 평균)</b><br>4개년 평균 매출: 약 7.9억/년<br>1회=1건(확정), 전액이 방문당 수익<br>전체 매출의 약 22% 차지<br>이익기여도: 1방문당 수익 최고</span></span></td>
+<td style="color:#86efac;padding:5px;text-align:right;font-weight:700;">23,000원</td>
+<td style="color:#86efac;padding:5px;text-align:center;">★★★</td>
+<td style="color:#86efac;padding:5px;text-align:center;">-4~4.5%</td>
+<td style="color:#94a3b8;padding:5px;font-size:11px;">유입 극대화 → 체험 후 회원 전환</td></tr>
+<tr style="background:#111827;"><td style="color:#fbbf24;padding:5px 10px;font-weight:700;">2위</td>
+<td style="color:#e2e8f0;padding:5px;"><span class="prd-tip2">쿠폰(10회)<span class="prd-pop2"><b>쿠폰 10회 (2018~2021 평균)</b><br>유효기간: 3개월. 회당 22,000원<br>미소진 시(7~8회) 실질 27,500~31,400원/회<br>4개년 평균 쿠폰 매출: 약 6.2억/년<br>미소진분은 순수익 → 실질 기여도 최상위</span></span></td>
+<td style="color:#86efac;padding:5px;text-align:right;font-weight:700;">22,000원+</td>
+<td style="color:#86efac;padding:5px;text-align:center;">★★★</td>
+<td style="color:#86efac;padding:5px;text-align:center;">-4.3%</td>
+<td style="color:#94a3b8;padding:5px;font-size:11px;">체험→전환 핵심 상품</td></tr>
+<tr><td style="color:#fbbf24;padding:5px 10px;font-weight:700;">3위</td>
+<td style="color:#e2e8f0;padding:5px;"><span class="prd-tip2">쿠폰(20회)<span class="prd-pop2"><b>쿠폰 20회 (2018~2021 평균)</b><br>유효기간: 6개월. 회당 21,500원<br>미소진 시(15~16회) 실질 26,900~28,700원/회<br>10회 대비 회당 500원 저렴(볼륨 할인)<br>재구매율 높은 핵심 상품</span></span></td>
+<td style="color:#86efac;padding:5px;text-align:right;font-weight:700;">21,500원+</td>
+<td style="color:#86efac;padding:5px;text-align:center;">★★☆</td>
+<td style="color:#86efac;padding:5px;text-align:center;">-4.4%</td>
+<td style="color:#94a3b8;padding:5px;font-size:11px;">주력 쿠폰, 재구매 유도</td></tr>
+<tr style="background:#111827;"><td style="color:#fbbf24;padding:5px 10px;font-weight:700;">4위</td>
+<td style="color:#e2e8f0;padding:5px;"><span class="prd-tip2">1개월권<span class="prd-pop2"><b>1개월권 (2018~2021 평균)</b><br>4개년 평균 매출: 약 1.0억/년<br>역산법: 총 타석건수에서 일일/쿠폰 차감 후 배분<br>추정 월 ~18회 방문 → 290,000÷18=16,100원/회<br>⚠ 방문횟수는 POS 없어 역산 추정(검증 필요)</span></span></td>
+<td style="color:#f9a8d4;padding:5px;text-align:right;font-weight:700;">16,100원</td>
+<td style="color:#f9a8d4;padding:5px;text-align:center;">★★☆</td>
+<td style="color:#f9a8d4;padding:5px;text-align:center;">-2.9~3.8%</td>
+<td style="color:#94a3b8;padding:5px;font-size:11px;">진입 상품, 3개월 전환 유도</td></tr>
+<tr><td style="color:#fbbf24;padding:5px 10px;font-weight:700;">5위</td>
+<td style="color:#e2e8f0;padding:5px;"><span class="prd-tip2">3개월권<span class="prd-pop2"><b>3개월권 (2018~2021 평균)</b><br>4개년 평균 매출: 약 6.1억/년 (최대 매출 상품)<br>역산법: 추정 월 ~20회 방문<br>800,000÷3÷20=13,300원/회<br>⚠ 방문횟수는 POS 없어 역산 추정(검증 필요)</span></span></td>
+<td style="color:#fdba74;padding:5px;text-align:right;font-weight:700;">13,300원</td>
+<td style="color:#fdba74;padding:5px;text-align:center;">★☆☆</td>
+<td style="color:#fdba74;padding:5px;text-align:center;">-3.6~4.3%</td>
+<td style="color:#94a3b8;padding:5px;font-size:11px;">안정 매출 기반, 볼륨 확보</td></tr>
+<tr style="background:#111827;"><td style="color:#fbbf24;padding:5px 10px;font-weight:700;">6위</td>
+<td style="color:#e2e8f0;padding:5px;"><span class="prd-tip2">6개월권<span class="prd-pop2"><b>6개월권 (2018~2021 평균)</b><br>4개년 평균 매출: 약 1.1억/년<br>역산법: 추정 월 ~22회 방문<br>1,580,000÷6÷22=12,000원/회<br>사우나/헬스 무료이용 비용(~3,000원/회) 감안<br>실질 순수익 ~9,000원/회<br>⚠ 방문횟수는 POS 없어 역산 추정(검증 필요)</span></span></td>
+<td style="color:#fca5a5;padding:5px;text-align:right;font-weight:700;">12,000원</td>
+<td style="color:#fca5a5;padding:5px;text-align:center;">★☆☆</td>
+<td style="color:#fca5a5;padding:5px;text-align:center;">-2.7~3.4%</td>
+<td style="color:#94a3b8;padding:5px;font-size:11px;">마진 보호, 사우나/헬스 비용 감안</td></tr>
+</table>
+</div>
+<div style="color:#94a3b8;font-size:12px;padding-top:10px;border-top:1px solid #334155;">
+<b>전략 요약</b>: 이익기여도 ★★★(일일/쿠폰)은 할인 -4%↑로 유입 극대화, ★☆☆(6개월)은 할인 -3%↓로 마진 보호. 고객 여정: 일일체험 → 쿠폰 → 1개월 → 3개월 → 6개월 VIP 전환
+</div>
+</div>
+""", unsafe_allow_html=True)
+
 # ═══ TAB 3: AI Strategy ═══
 if _ti == 3:
-    sec("🤖", "AI 추천 사업전략")
+    sec("🤖", "조건값 내 AI 추천 사업전략")
     info("현재 입력된 모든 가정값, 과거 실적, 경쟁사 분석을 종합하여 등촌골프연습장의 최적 사업전략을 제안합니다. 5년 후 매각/명도를 고려한 출구전략도 포함합니다.")
 
-    subsec("1. 요금 전략 — AI 추천 최적 요금표")
+    subsec("1. 요금 전략 — 조건값 내 최적 요금표(안)")
 
     # 전략 근거 설명 — 팩트 기반, 이론적 프레임워크 포함
     st.markdown("""
@@ -2345,27 +2617,139 @@ if _ti == 3:
     # 이익기여도 기반 전략 카드 — 올바른 순서: 일일>쿠폰>1개월>3개월>6개월
     st.markdown("""
 <div style="background:#0f172a;border:1px solid #334155;border-radius:12px;padding:20px;margin:16px 0;">
-<div style="color:#fbbf24;font-size:15px;font-weight:700;margin-bottom:6px;">📊 이익기여도 기반 가격 전략</div>
+<div style="color:#fbbf24;font-size:15px;font-weight:700;margin-bottom:6px;">📊 이익기여도 기반 가격 전략 (2018~2021 4개년 평균)</div>
 <div style="color:#94a3b8;font-size:12px;margin-bottom:14px;">
-1방문당 수익이 높은 상품 = 이익기여도 높음. 장기권은 자주 방문하여 객단가가 희석되고, 모든 회원이 사우나/피트니스 무료 이용 가능하므로 장기권일수록 시설 이용 비용이 증가합니다.
+2018~2021년 4개년 평균 실적 기반. 1방문당 수익이 높은 상품 = 이익기여도 높음. 장기권은 자주 방문하여 객단가가 희석되고, 모든 회원이 사우나/피트니스 무료 이용 가능하므로 장기권일수록 시설 이용 비용이 증가합니다.
 </div>
 
+<div style="background:#172554;border:1px solid #1e3a5f;border-radius:8px;padding:12px 14px;margin-bottom:12px;">
+<span style="color:#93c5fd;font-size:12px;">
+<b>📐 산출 방법: 타석 총량 역산법</b> — POS 방문기록이 없으므로 2021년 실적 데이터와 타석 운영 총량을 역산하여 상품별 방문횟수를 추정합니다.<br>
+<b>계산식</b>: 88타석 × 14타임/일(06~23시, 70분) × 365일 = 연간 최대 449,120건 → 가동률 59%(2021 매출÷최대매출 역산) 적용 → <b>실제 약 265,000건/년</b><br>
+<b>배분</b>: 일일권(1인=1건 확정) → 쿠폰(회당 1건 확정) → 나머지를 1개월/3개월/6개월 회원의 월정액 비중으로 배분<br>
+<b>출처</b>: 2021 Excel 실적(회원수·매출), KGA 2023 한국골프지표(연평균 18.1회) | ⚠️ 오픈 후 POS 실측 데이터로 교체 필요
+</span>
+</div>
 <div style="background:#1e293b;border-radius:10px;padding:14px;margin-bottom:12px;">
-<div style="color:#e2e8f0;font-size:13px;font-weight:600;margin-bottom:8px;">📐 1방문당 실질 수익 (이익기여도 순위)</div>
+<div style="color:#e2e8f0;font-size:13px;font-weight:600;margin-bottom:8px;">📐 1방문당 실질 수익 (이익기여도 순위) — 상품명에 마우스를 올리면 계산 과정이 표시됩니다</div>
+<style>
+.prd-tip { position:relative; cursor:help; border-bottom:1px dotted #64748b; }
+.prd-tip .prd-pop {
+    display:none; position:absolute; bottom:130%; left:0; width:320px; z-index:999;
+    background:#0f172a; border:1px solid #334155; border-radius:10px; padding:14px;
+    box-shadow:0 8px 24px rgba(0,0,0,0.5); font-size:11px; line-height:1.7; color:#cbd5e1;
+}
+.prd-tip:hover .prd-pop { display:block; }
+.prd-pop b { color:#60a5fa; } .prd-pop .val { color:#fbbf24; font-weight:700; }
+</style>
 <table style="width:100%;border-collapse:collapse;font-size:12px;">
 <tr>
 <th style="color:#60a5fa;padding:6px 10px;text-align:left;border-bottom:1px solid #334155;">순위</th>
 <th style="color:#60a5fa;padding:6px;text-align:left;border-bottom:1px solid #334155;">상품</th>
 <th style="color:#60a5fa;padding:6px;text-align:right;border-bottom:1px solid #334155;">가격</th>
-<th style="color:#60a5fa;padding:6px;text-align:right;border-bottom:1px solid #334155;">월 방문</th>
+<th style="color:#60a5fa;padding:6px;text-align:right;border-bottom:1px solid #334155;">월 방문(역산)</th>
 <th style="color:#60a5fa;padding:6px;text-align:right;border-bottom:1px solid #334155;">1방문당 수익</th>
 <th style="color:#60a5fa;padding:6px;text-align:left;border-bottom:1px solid #334155;">할인 전략</th>
 </tr>
-<tr><td style="color:#fbbf24;padding:5px 10px;font-weight:700;">1위</td><td style="color:#e2e8f0;padding:5px;">일일권</td><td style="color:#e2e8f0;padding:5px;text-align:right;">23,000원</td><td style="color:#94a3b8;padding:5px;text-align:right;">1회</td><td style="color:#86efac;padding:5px;text-align:right;font-weight:700;">23,000원</td><td style="color:#86efac;padding:5px;font-size:11px;">-4~4.5% (유입 극대화)</td></tr>
-<tr style="background:#111827;"><td style="color:#fbbf24;padding:5px 10px;font-weight:700;">2위</td><td style="color:#e2e8f0;padding:5px;">쿠폰(20회)</td><td style="color:#e2e8f0;padding:5px;text-align:right;">430,000원</td><td style="color:#94a3b8;padding:5px;text-align:right;">~4회</td><td style="color:#86efac;padding:5px;text-align:right;font-weight:700;">21,500원</td><td style="color:#86efac;padding:5px;font-size:11px;">-3~4.5% (전환 유도)</td></tr>
-<tr><td style="color:#fbbf24;padding:5px 10px;font-weight:700;">3위</td><td style="color:#e2e8f0;padding:5px;">1개월권</td><td style="color:#e2e8f0;padding:5px;text-align:right;">290,000원</td><td style="color:#94a3b8;padding:5px;text-align:right;">~18회</td><td style="color:#f9a8d4;padding:5px;text-align:right;font-weight:700;">16,100원</td><td style="color:#f9a8d4;padding:5px;font-size:11px;">-2.9~3.8% (진입)</td></tr>
-<tr style="background:#111827;"><td style="color:#fbbf24;padding:5px 10px;font-weight:700;">4위</td><td style="color:#e2e8f0;padding:5px;">3개월권</td><td style="color:#e2e8f0;padding:5px;text-align:right;">800,000원</td><td style="color:#94a3b8;padding:5px;text-align:right;">~20회</td><td style="color:#fdba74;padding:5px;text-align:right;font-weight:700;">13,300원</td><td style="color:#fdba74;padding:5px;font-size:11px;">-3.6~4.3% (볼륨 확보)</td></tr>
-<tr><td style="color:#fbbf24;padding:5px 10px;font-weight:700;">5위</td><td style="color:#e2e8f0;padding:5px;">6개월권</td><td style="color:#e2e8f0;padding:5px;text-align:right;">1,580,000원</td><td style="color:#94a3b8;padding:5px;text-align:right;">~22회</td><td style="color:#fca5a5;padding:5px;text-align:right;font-weight:700;">12,000원</td><td style="color:#fca5a5;padding:5px;font-size:11px;">-2.7~3.4% (마진 보호)</td></tr>
+
+<tr><td style="color:#fbbf24;padding:5px 10px;font-weight:700;">1위</td>
+<td style="color:#e2e8f0;padding:5px;"><span class="prd-tip">일일권<span class="prd-pop">
+<b>일일권 — 2018~2021 4개년 평균</b><br>
+• 결제 = 방문: <span class="val">1회 = 1건 (확정)</span><br>
+• 4개년 평균 이용객: <span class="val">71,548명/년</span><br>
+• 4개년 평균 매출: <span class="val">13.9억/년</span><br>
+• 4개년 평균 이익: <span class="val">6.7억/년</span><br>
+• 전체 매출의 약 37% 차지 (최대 비중)<br>
+<b>→ 23,000원/방문 (희석 없음, 기여도 1위)</b>
+</span></span></td>
+<td style="color:#e2e8f0;padding:5px;text-align:right;">23,000원</td>
+<td style="color:#94a3b8;padding:5px;text-align:right;">1회 (확정)</td>
+<td style="color:#86efac;padding:5px;text-align:right;font-weight:700;">23,000원</td>
+<td style="color:#86efac;padding:5px;font-size:11px;">-4~4.5%</td></tr>
+
+<tr style="background:#111827;"><td style="color:#fbbf24;padding:5px 10px;font-weight:700;">2위</td>
+<td style="color:#e2e8f0;padding:5px;"><span class="prd-tip">쿠폰(10회)<span class="prd-pop">
+<b>쿠폰 10회 — 2018~2021 4개년 평균</b><br>
+• 10회 쿠폰 = <span class="val">10건 이용 (확정)</span><br>
+• 유효기간: <span class="val">3개월</span><br>
+• 220,000원 ÷ 10회 = <span class="val">22,000원/회</span><br>
+• 4개년 평균 쿠폰 이용: <span class="val">2,906명/년</span><br>
+• 4개년 평균 쿠폰 매출: <span class="val">7.4억/년</span><br>
+<b>→ 22,000원/방문</b><br>
+<span style="color:#86efac;">※ 미소진 시(7~8회) 실질 27,500~31,400원/회<br>
+미소진분은 순수익 → 실질 기여도 더 높음</span>
+</span></span></td>
+<td style="color:#e2e8f0;padding:5px;text-align:right;">220,000원</td>
+<td style="color:#94a3b8;padding:5px;text-align:right;">10회 (확정)</td>
+<td style="color:#86efac;padding:5px;text-align:right;font-weight:700;">22,000원</td>
+<td style="color:#86efac;padding:5px;font-size:11px;">-4.3%</td></tr>
+
+<tr><td style="color:#fbbf24;padding:5px 10px;font-weight:700;">3위</td>
+<td style="color:#e2e8f0;padding:5px;"><span class="prd-tip">쿠폰(20회)<span class="prd-pop">
+<b>쿠폰 20회 — 2018~2021 4개년 평균</b><br>
+• 20회 쿠폰 = <span class="val">20건 이용 (확정)</span><br>
+• 유효기간: <span class="val">6개월</span><br>
+• 430,000원 ÷ 20회 = <span class="val">21,500원/회</span><br>
+• 10회 대비 회당 500원 저렴 (볼륨 할인)<br>
+<b>→ 21,500원/방문</b><br>
+<span style="color:#86efac;">※ 미소진 시(15~16회) 실질 26,900~28,700원/회<br>
+미소진분은 순수익 → 실질 기여도 더 높음</span>
+</span></span></td>
+<td style="color:#e2e8f0;padding:5px;text-align:right;">430,000원</td>
+<td style="color:#94a3b8;padding:5px;text-align:right;">20회 (확정)</td>
+<td style="color:#86efac;padding:5px;text-align:right;font-weight:700;">21,500원</td>
+<td style="color:#86efac;padding:5px;font-size:11px;">-4.4%</td></tr>
+
+<tr style="background:#111827;"><td style="color:#fbbf24;padding:5px 10px;font-weight:700;">4위</td>
+<td style="color:#e2e8f0;padding:5px;"><span class="prd-tip">1개월권<span class="prd-pop">
+<b>1개월권 — 2018~2021 4개년 평균 역산</b><br>
+• 4개년 평균 회원: <span class="val">806명/년</span><br>
+• 4개년 평균 매출: <span class="val">1.8억/년</span><br>
+• 4개년 평균 이익: <span class="val">0.9억/년</span><br>
+• 역산 추정 월 방문: <span class="val">~18회</span><br>
+• 290,000원 ÷ 18회 = <span class="val">약 16,100원/회</span><br>
+<span style="color:#f97316;">⚠ 방문횟수는 POS 없어 역산 추정</span><br>
+※ 단, 무제한 이용이므로 실제 방문은 더 많음<br>
+• <b>현실 추정: 월 15~20회</b> (무제한 특성상)<br>
+• 290,000 ÷ 18회 = <span class="val">약 16,100원/방문</span><br>
+<b>⚠️ 역산과 무제한 특성을 종합한 추정치</b>
+</span></span></td>
+<td style="color:#e2e8f0;padding:5px;text-align:right;">290,000원</td>
+<td style="color:#94a3b8;padding:5px;text-align:right;">~18회 (추정)</td>
+<td style="color:#f9a8d4;padding:5px;text-align:right;font-weight:700;">16,100원</td>
+<td style="color:#f9a8d4;padding:5px;font-size:11px;">-2.9~3.8%</td></tr>
+
+<tr><td style="color:#fbbf24;padding:5px 10px;font-weight:700;">5위</td>
+<td style="color:#e2e8f0;padding:5px;"><span class="prd-tip">3개월권<span class="prd-pop">
+<b>3개월권 — 2018~2021 4개년 평균 역산</b><br>
+• 4개년 평균 회원: <span class="val">1,514명/년</span><br>
+• 4개년 평균 매출: <span class="val">8.0억/년 (최대 매출 상품)</span><br>
+• 4개년 평균 이익: <span class="val">3.7억/년</span><br>
+• 역산 추정 월 방문: <span class="val">~20회</span><br>
+• 800,000 ÷ 3개월 ÷ 20회 = <span class="val">약 13,300원/회</span><br>
+<span style="color:#f97316;">⚠ 방문횟수는 POS 없어 역산 추정</span>
+</span></span></td>
+<td style="color:#e2e8f0;padding:5px;text-align:right;">800,000원</td>
+<td style="color:#94a3b8;padding:5px;text-align:right;">~20회 (추정)</td>
+<td style="color:#fdba74;padding:5px;text-align:right;font-weight:700;">13,300원</td>
+<td style="color:#fdba74;padding:5px;font-size:11px;">-3.6~4.3%</td></tr>
+
+<tr style="background:#111827;"><td style="color:#fbbf24;padding:5px 10px;font-weight:700;">6위</td>
+<td style="color:#e2e8f0;padding:5px;"><span class="prd-tip">6개월권<span class="prd-pop">
+<b>6개월권 — 역산 계산 과정</b><br>
+• 2019~2021 평균 회원: <span class="val">176명/년</span> (2018년 미운영)<br>
+• 2019~2021 평균 매출: <span class="val">1.6억/년</span><br>
+• 2019~2021 평균 이익: <span class="val">0.8억/년</span><br>
+• 역산 추정 월 방문: <span class="val">~22회</span> (장기 약정, 거의 매일)<br>
+• 1,580,000 ÷ 6 ÷ 22 = <span class="val">약 12,000원/회</span><br>
+• 사우나/헬스 무료이용 비용(~3,000원/회) 감안 시<br>
+  실질 순수익: <span class="val">약 9,000원/회</span><br>
+<span style="color:#f97316;">⚠ 방문횟수는 POS 없어 역산 추정</span>
+</span></span></td>
+<td style="color:#e2e8f0;padding:5px;text-align:right;">1,580,000원</td>
+<td style="color:#94a3b8;padding:5px;text-align:right;">~22회 (추정)</td>
+<td style="color:#fca5a5;padding:5px;text-align:right;font-weight:700;">12,000원</td>
+<td style="color:#fca5a5;padding:5px;font-size:11px;">-2.7~3.4%</td></tr>
 </table>
 </div>
 
@@ -2491,6 +2875,96 @@ if _ti == 3:
         yr2_html += f'<tr><td style="background:#1e293b;color:#f8fafc;padding:8px;font-weight:700;">합계</td><td style="background:#1e293b;color:#fbbf24;padding:8px;text-align:right;font-weight:700;font-size:14px;">{yr2_total/억:.1f}억</td></tr></table>'
         st.markdown(yr2_html, unsafe_allow_html=True)
 
+    # 실제 확인된 경쟁 연습장 요금 비교
+    subsec("경쟁 연습장 요금 비교 (실제 확인 데이터)")
+    info("웹사이트에서 직접 확인된 요금만 표시합니다. '-'는 해당 상품 미운영 또는 미확인. 전국 평균은 김캐디 2023 데이터 기준.")
+
+    avg1_html = """
+<table style="width:100%;border-collapse:collapse;font-size:12px;margin:8px 0;">
+<tr>
+<th style="background:#1e293b;color:#60a5fa;padding:9px 12px;text-align:left;border-bottom:2px solid #334155;">연습장</th>
+<th style="background:#1e293b;color:#94a3b8;padding:9px;text-align:left;border-bottom:2px solid #334155;">위치</th>
+<th style="background:#1e293b;color:#94a3b8;padding:9px;text-align:center;border-bottom:2px solid #334155;">타석</th>
+<th style="background:#1e293b;color:#e2e8f0;padding:9px;text-align:right;border-bottom:2px solid #334155;">1개월 종일</th>
+<th style="background:#1e293b;color:#e2e8f0;padding:9px;text-align:right;border-bottom:2px solid #334155;">3개월 종일</th>
+<th style="background:#1e293b;color:#e2e8f0;padding:9px;text-align:right;border-bottom:2px solid #334155;">6개월 종일</th>
+<th style="background:#1e293b;color:#e2e8f0;padding:9px;text-align:right;border-bottom:2px solid #334155;">일일 60~70분</th>
+<th style="background:#1e293b;color:#e2e8f0;padding:9px;text-align:right;border-bottom:2px solid #334155;">쿠폰 10회</th>
+<th style="background:#1e293b;color:#94a3b8;padding:9px;text-align:left;border-bottom:2px solid #334155;">출처</th>
+</tr>
+<tr>
+<td style="background:#0f4c3a;color:#86efac;padding:8px 12px;font-weight:700;">등촌(AI추천)</td>
+<td style="background:#0f4c3a;color:#86efac;padding:8px;">강서구 등촌동</td>
+<td style="background:#0f4c3a;color:#86efac;padding:8px;text-align:center;">88</td>
+<td style="background:#0f4c3a;color:#86efac;padding:8px;text-align:right;font-weight:700;">290,000</td>
+<td style="background:#0f4c3a;color:#86efac;padding:8px;text-align:right;font-weight:700;">800,000</td>
+<td style="background:#0f4c3a;color:#86efac;padding:8px;text-align:right;font-weight:700;">1,580,000</td>
+<td style="background:#0f4c3a;color:#86efac;padding:8px;text-align:right;font-weight:700;">23,000</td>
+<td style="background:#0f4c3a;color:#86efac;padding:8px;text-align:right;font-weight:700;">220,000</td>
+<td style="background:#0f4c3a;color:#86efac;padding:8px;font-size:10px;">AI 추천가</td>
+</tr>
+<tr>
+<td style="background:#111827;color:#fca5a5;padding:8px 12px;font-weight:700;">제니스스포츠</td>
+<td style="background:#111827;color:#e2e8f0;padding:8px;">구로구 고척동</td>
+<td style="background:#111827;color:#e2e8f0;padding:8px;text-align:center;">112</td>
+<td style="background:#111827;color:#fca5a5;padding:8px;text-align:right;font-weight:600;">300,000</td>
+<td style="background:#111827;color:#fca5a5;padding:8px;text-align:right;font-weight:600;">830,000</td>
+<td style="background:#111827;color:#fca5a5;padding:8px;text-align:right;font-weight:600;">1,630,000</td>
+<td style="background:#111827;color:#fca5a5;padding:8px;text-align:right;font-weight:600;">24,000</td>
+<td style="background:#111827;color:#fca5a5;padding:8px;text-align:right;font-weight:600;">230,000</td>
+<td style="background:#111827;color:#94a3b8;padding:8px;font-size:10px;">사용자 제공</td>
+</tr>
+<tr>
+<td style="background:#0f172a;color:#e2e8f0;padding:8px 12px;font-weight:700;">메이필드호텔</td>
+<td style="background:#0f172a;color:#e2e8f0;padding:8px;">강서구 방화동</td>
+<td style="background:#0f172a;color:#e2e8f0;padding:8px;text-align:center;">75</td>
+<td style="background:#0f172a;color:#e2e8f0;padding:8px;text-align:right;">322,000</td>
+<td style="background:#0f172a;color:#e2e8f0;padding:8px;text-align:right;">795,000</td>
+<td style="background:#0f172a;color:#94a3b8;padding:8px;text-align:right;">-</td>
+<td style="background:#0f172a;color:#e2e8f0;padding:8px;text-align:right;">22,000</td>
+<td style="background:#0f172a;color:#e2e8f0;padding:8px;text-align:right;">220,000</td>
+<td style="background:#0f172a;color:#94a3b8;padding:8px;font-size:10px;">mayfield.co.kr</td>
+</tr>
+</table>
+"""
+    st.markdown(avg1_html, unsafe_allow_html=True)
+
+    # 등촌 vs 경쟁사 차이율
+    st.markdown("""
+<div style="background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:16px;margin:10px 0;">
+<div style="color:#60a5fa;font-weight:700;font-size:13px;margin-bottom:10px;">등촌 추천가 vs 경쟁사 차이 (1개월 종일 기준, 실제 데이터)</div>
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;text-align:center;">
+<div style="background:#111827;border-radius:8px;padding:12px;">
+<div style="color:#fca5a5;font-size:12px;font-weight:600;">제니스 (300,000원)</div>
+<div style="color:#86efac;font-size:20px;font-weight:800;">-3.3%</div>
+<div style="color:#94a3b8;font-size:11px;">10,000원 저렴</div>
+</div>
+<div style="background:#111827;border-radius:8px;padding:12px;">
+<div style="color:#e2e8f0;font-size:12px;font-weight:600;">메이필드 (322,000원)</div>
+<div style="color:#86efac;font-size:20px;font-weight:800;">-9.9%</div>
+<div style="color:#94a3b8;font-size:11px;">32,000원 저렴 (호텔 프리미엄)</div>
+</div>
+<div style="background:#111827;border-radius:8px;padding:12px;">
+<div style="color:#e2e8f0;font-size:12px;font-weight:600;">88CC (200,000원)</div>
+<div style="color:#fca5a5;font-size:20px;font-weight:800;">+45.0%</div>
+<div style="color:#94a3b8;font-size:11px;">90,000원 비쌈 (골프장 부설, 저가)</div>
+</div>
+</div>
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown("""
+<div style="background:#1e293b;border-radius:10px;padding:14px;margin:10px 0;border-left:3px solid #3b82f6;">
+<span style="color:#93c5fd;font-size:0.85rem;line-height:1.7;">
+<b>분석 결과 (실제 데이터 기반)</b><br>
+• <b>직접 경쟁사 제니스</b>(112타석, 구로구): 등촌이 3.3% 저렴. 신축 시설 대비 적정 차이<br>
+• <b>메이필드호텔</b>(75타석, 강서구): 호텔 부대시설 프리미엄으로 9.9% 비쌈. 고객층 상이<br>
+• <b>88CC</b>(영등포구, 골프장 부설): 골프장 부설 연습장으로 저가 포지셔닝. 비교 대상으로 부적합<br>
+<b>⚠️ 양천구(목동골프타운), 마포구, 서대문구</b>: 80타석 이상 대형 실외 연습장이 존재하지 않거나 홈페이지 요금 미공개로 확인 불가. 추후 직접 전화 조사 필요
+</span>
+</div>
+""", unsafe_allow_html=True)
+
     # 인상 로드맵
     st.markdown("""
 <div style="background:#1e293b;border-radius:12px;padding:18px;margin:12px 0;border-left:4px solid #a855f7;">
@@ -2514,7 +2988,7 @@ if _ti == 3:
 |------|---------|--------|-----------|------|
 | 무인편의점 (CU/세븐일레븐) | **직영/FC** | 월 200~300만원 | 즉시 가능 | 24시간 무인, 인건비 제로, 이용객 필수 |
 | 음료자판기 코너 | **직영** | 월 80~120만원 | 즉시 가능 | 자판기 3~4대, 관리 최소 |
-| 스크린골프존 (골프존 5대) | **골프존 FC** | 월 400~500만원 | 계약 해지 | 실내 5대, 우천/한파 대안, 단체 레슨 활용 |
+| 스크린골프존 (골프존 5대) | **직영 운영** | 월 약 1,000만원 | 장비 철거 | 오픈과 동시 운영, 별도 인건비 없음(안내팀 겸직), 비수기 핵심 대안 |
 | 프로 레슨 공간 (프로 3명) | **임대** | 월 450만원 | 계약 종료 | 프로 1인 월 150만원 고정 임대 |
 | 예비 공간 | **미임대** | - | 즉시 | 향후 수요에 따라 결정 |
 
@@ -2523,7 +2997,7 @@ if _ti == 3:
 **외부 임차인 주의사항**
 - 5년 후 매각/명도 시 외부 임차인의 **상가임대차보호법** 적용으로 명도 지연 리스크
 - 상가임대차보호법상 임차인은 **10년간 갱신 요구권** 보유 → 외부 임대 최소화 필수
-- 스크린골프존은 골프존 FC 계약이므로 계약 해지 시 장비 회수 가능 (명도 용이)
+- 스크린골프존은 직영 운영(월 매출 약 1,000만원, 별도 인건비 없음). 매각 시 장비 철거로 즉시 명도 가능
 - 프로 레슨은 1년 단위 계약, 갱신 거절 사유 확보 필요
 - **가능하면 계열사/직영/FC로 운영하여 명도 100% 통제**
 """)
@@ -2551,110 +3025,83 @@ if _ti == 3:
 - 월 마케팅 예산: 150만원
 """)
 
-    subsec("4. 인력 운영전략 — 2026년 기준 현실 설계")
+    subsec("4. 인력 운영전략 — 컨트롤 패널 연동")
+    info("좌측 컨트롤 패널 '인건비·조직구성'에서 입력한 값이 실시간 반영됩니다.")
 
-    # 인력 구성 HTML 테이블
-    st.markdown("""
-<div style="background:#1e293b;border-radius:10px;padding:14px;margin:8px 0;border-left:4px solid #3b82f6;">
-<b style="color:#60a5fa;">2026년 기준</b>: 최저임금 약 10,030원/시간, 월 209시간 = <b>약 210만원</b> (4대보험 사업주 부담 약 9~10% 별도)
-</div>
-""", unsafe_allow_html=True)
-
-    staff_data = [
-        ('대표', 1, '총괄경영, 대외관계, 의사결정', '583~667만', '583~667만', '연봉 7,000~8,000만원 기준'),
-        ('총무팀', 1, '인사/구매/계약/대관 관리', '350~400만', '350~400만', '팀장급 1명, 10년 이상 경력'),
-        ('경리팀', 1, '회계/세무/자금관리/정산', '280~320만', '280~320만', '주임급 1명, 회계 자격 보유자'),
-        ('시설팀', 3, '타석관리/장비정비/볼머신/청소', '300~350만', '900~1,050만', '10년+ 경력자, 장비 유지보수 전문'),
-        ('안내팀', 3, '프론트/회원관리/예약/고객응대', '300~350만', '900~1,050만', '기본급 3,000만+3교대 특근·주말수당'),
+    # 컨트롤 패널 변수 참조
+    _staff = [
+        ('대표', ceo_n, ceo_s, '총괄경영, 대외관계, 의사결정'),
+        ('총무팀', adm_n, adm_s, '인사/구매/계약/대관 (팀장급)'),
+        ('경리팀', acc_n, acc_s, '회계/세무/자금관리 (주임급)'),
+        ('시설팀', fac_n, fac_s, '타석/장비/볼머신/설비 (10년+경력)'),
+        ('안내팀', desk_n, desk_s, '프론트/회원관리/예약 (특근최소화)'),
     ]
+    _total_n = sum(s[1] for s in _staff)
+    _total_sal = sum(s[1]*s[2] for s in _staff)
+    _ins_rate = s_insurance  # 컨트롤 패널의 4대보험율
+    _total_with_ins = _total_sal * (1 + _ins_rate)
 
     t_html = '<table style="width:100%;border-collapse:collapse;font-size:13px;margin:8px 0;">'
     t_html += '<tr>'
-    for h in ['부서', '인원', '역할', '월급(1인)', '월 소계', '비고']:
+    for h in ['부서', '인원', '월급(1인)', '월 소계', '역할']:
         t_html += f'<th style="background:#1e293b;color:#60a5fa;padding:10px 12px;text-align:left;border-bottom:2px solid #334155;">{h}</th>'
     t_html += '</tr>'
-    total_low, total_high = 0, 0
-    for i, (dept, cnt, role, pay, subtotal, note) in enumerate(staff_data):
+    for i, (dept, cnt, sal, role) in enumerate(_staff):
         bg = '#111827' if i % 2 == 0 else '#0f172a'
+        sub = cnt * sal
         t_html += f'<tr>'
         t_html += f'<td style="background:{bg};color:#e2e8f0;padding:8px 12px;font-weight:700;border-bottom:1px solid #1e293b;">{dept}</td>'
         t_html += f'<td style="background:{bg};color:#e2e8f0;padding:8px 12px;text-align:center;border-bottom:1px solid #1e293b;">{cnt}명</td>'
+        t_html += f'<td style="background:{bg};color:#e2e8f0;padding:8px 12px;text-align:right;border-bottom:1px solid #1e293b;">{sal:,}만</td>'
+        t_html += f'<td style="background:{bg};color:#86efac;padding:8px 12px;text-align:right;font-weight:600;border-bottom:1px solid #1e293b;">{sub:,}만</td>'
         t_html += f'<td style="background:{bg};color:#94a3b8;padding:8px 12px;font-size:12px;border-bottom:1px solid #1e293b;">{role}</td>'
-        t_html += f'<td style="background:{bg};color:#e2e8f0;padding:8px 12px;text-align:right;border-bottom:1px solid #1e293b;">{pay}</td>'
-        t_html += f'<td style="background:{bg};color:#86efac;padding:8px 12px;text-align:right;font-weight:600;border-bottom:1px solid #1e293b;">{subtotal}</td>'
-        t_html += f'<td style="background:{bg};color:#94a3b8;padding:8px 12px;font-size:11px;border-bottom:1px solid #1e293b;">{note}</td>'
         t_html += '</tr>'
     t_html += f"""<tr>
-        <td style="background:#1e293b;color:#f8fafc;padding:10px 12px;font-weight:700;" colspan="3">합계 ({sum(s[1] for s in staff_data)}명)</td>
-        <td style="background:#1e293b;color:#f8fafc;padding:10px 12px;text-align:right;font-weight:700;">-</td>
-        <td style="background:#1e293b;color:#fbbf24;padding:10px 12px;text-align:right;font-weight:700;font-size:15px;">3,013~3,487만</td>
-        <td style="background:#1e293b;color:#94a3b8;padding:10px 12px;font-size:11px;">4대보험 9% 별도 (+271~314만)</td>
+        <td style="background:#1e293b;color:#f8fafc;padding:10px 12px;font-weight:700;">합계</td>
+        <td style="background:#1e293b;color:#f8fafc;padding:10px 12px;text-align:center;font-weight:700;">{_total_n}명</td>
+        <td style="background:#1e293b;color:#94a3b8;padding:10px 12px;text-align:right;">-</td>
+        <td style="background:#1e293b;color:#fbbf24;padding:10px 12px;text-align:right;font-weight:700;font-size:15px;">{_total_sal:,.0f}만</td>
+        <td style="background:#1e293b;color:#94a3b8;padding:10px 12px;font-size:11px;">4대보험 {_ins_rate*100:.1f}% 별도</td>
     </tr>"""
     t_html += '</table>'
     st.markdown(t_html, unsafe_allow_html=True)
 
-    st.markdown("""
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0;">
-<div style="background:#1e293b;border-radius:10px;padding:16px;border-left:4px solid #22c55e;">
-<b style="color:#86efac;">안내팀 급여 산출 근거</b><br>
-<span style="color:#cbd5e1;">
-• 기본급: 연 3,000만원 (월 250만원)<br>
-• 3교대 근무: 조·중·석, 주 40시간 기준<br>
-• 특근수당(야간 22시~06시): 기본급 × 50% 가산<br>
-• 주말/공휴일 수당: 기본급 × 50% 가산<br>
-• 실질 월 지급액: <b>300~350만원</b> (수당 포함)
-</span>
-</div>
-<div style="background:#1e293b;border-radius:10px;padding:16px;border-left:4px solid #f97316;">
-<b style="color:#fdba74;">시설팀 급여 산출 근거</b><br>
-<span style="color:#cbd5e1;">
-• 10년+ 경력 숙련 기술자 기준<br>
-• 골프 타석, 볼머신, 전기/설비 유지보수<br>
-• 시중 시설관리 경력자 급여: 월 300~350만원<br>
-• 교대 근무 시 야간/특근 수당 별도 발생<br>
-• 실질 월 지급액: <b>300~350만원</b>
-</span>
-</div>
-</div>
-""", unsafe_allow_html=True)
-
-    # 월 인건비 총액 산출
-    monthly_low = 3013
-    monthly_high = 3487
-    ins_low = int(monthly_low * 0.09)
-    ins_high = int(monthly_high * 0.09)
-    total_low = monthly_low + ins_low
-    total_high = monthly_high + ins_high
+    # 총액 산출 카드
+    _ins_amt = _total_sal * _ins_rate
+    _annual = _total_with_ins * 12
 
     st.markdown(f"""
 <div style="background:#0f172a;border:1px solid #334155;border-radius:12px;padding:18px;margin:12px 0;">
 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;text-align:center;">
 <div>
 <div style="color:#94a3b8;font-size:12px;">월 급여 합계</div>
-<div style="color:#e2e8f0;font-size:22px;font-weight:700;">{monthly_low:,}~{monthly_high:,}만</div>
+<div style="color:#e2e8f0;font-size:22px;font-weight:700;">{_total_sal:,.0f}만</div>
 </div>
 <div>
-<div style="color:#94a3b8;font-size:12px;">4대보험 사업주 부담 (9%)</div>
-<div style="color:#e2e8f0;font-size:22px;font-weight:700;">+{ins_low:,}~{ins_high:,}만</div>
+<div style="color:#94a3b8;font-size:12px;">4대보험 ({_ins_rate*100:.1f}%)</div>
+<div style="color:#e2e8f0;font-size:22px;font-weight:700;">+{_ins_amt:,.0f}만</div>
 </div>
 <div>
 <div style="color:#94a3b8;font-size:12px;">월 총 인건비</div>
-<div style="color:#fbbf24;font-size:22px;font-weight:800;">{total_low:,}~{total_high:,}만</div>
+<div style="color:#fbbf24;font-size:22px;font-weight:800;">{_total_with_ins:,.0f}만</div>
 </div>
 </div>
-<div style="color:#94a3b8;font-size:12px;margin-top:10px;text-align:center;">연간 인건비: <b>{total_low*12/만:.1f}억~{total_high*12/만:.1f}억</b> (퇴직충당금 별도)</div>
+<div style="color:#94a3b8;font-size:12px;margin-top:10px;text-align:center;">연간 인건비: <b>{_annual/만:.1f}억</b> (퇴직충당금 별도)</div>
 </div>
 """, unsafe_allow_html=True)
 
-    st.markdown("""
+    # 인건비율 분석
+    _labor_ratio_2027 = (_annual * 만) / rev_p[1] * 100 if len(rev_p) > 1 and rev_p[1] else 0
+    st.markdown(f"""
 <div style="background:#1e293b;border-radius:12px;padding:16px;margin:8px 0;border-left:4px solid #a855f7;">
 <b style="color:#c4b5fd;">운영 효율화 방안</b><br><br>
 <span style="color:#cbd5e1;">
+• <b>현재 인건비율</b>: 매출 대비 <b>{_labor_ratio_2027:.1f}%</b> {'(목표 25% 이하 달성)' if _labor_ratio_2027 <= 25 else '(⚠️ 목표 25% 초과 — 효율화 필요)'}<br>
 • <b>무인 키오스크</b>: 야간/주말 프론트 인력 절감 (자동 결제·회원 인증)<br>
 • <b>자동 볼머신</b>: 시설팀 볼 수거 업무 자동화<br>
 • <b>클라우드 POS + 회원관리 앱</b>: 경리팀 정산·회계 자동화<br>
-• <b>야간 최소 운영</b>: 20시 이후 안내 1명 + 시설 1명 (총 2명)<br>
-• <b>인건비율 목표</b>: 매출 대비 25% 이하 유지 → 매출 26억 기준 연 인건비 6.5억 이하
+• <b>특근/야근 최소화</b>: 2교대 기본, 주말 대체휴무 원칙<br>
+• <b>야간 최소 운영</b>: 20시 이후 안내 1명 + 시설 1명 (총 2명)
 </span>
 </div>
 """, unsafe_allow_html=True)
@@ -2671,7 +3118,7 @@ if _ti == 3:
 - 보증금 회수 + 누적 현금흐름
 - 임대매장 명도 상세:
   - 무인편의점(직영/FC): 자판기 철거 후 **즉시 명도** 가능
-  - 스크린골프존(골프존 FC): FC 계약 해지 → 골프존 장비 회수, **1~2개월 소요**
+  - 스크린골프존(직영): 장비 철거로 **즉시 명도** 가능
   - 프로 레슨(임대): 1년 단위 계약, 갱신 거절 통보 **6개월 전** 필요
   - 예비 공간: **즉시 명도**
 - **핵심**: 외부 임차인 없이 직영/FC 위주이므로 명도 리스크 최소 (전체 1~2개월 내 완료 가능)
@@ -2695,6 +3142,201 @@ if _ti == 3:
 | 5 | **매각 리스크** | 출구 불확실 | 임대매장 직영/FC 유지(명도 용이), 3년차부터 매각 준비, 복수 매수인 접촉 |
 | 6 | **미세먼지/우천** | 실외 영업 불가 | 서울 미세먼지 나쁨이상 연 80일↑. 스크린골프 5대+실내 공간으로 부분 대안 |
 """)
+
+    # ══ 실행 로드맵 ══
+    subsec("7. 실행 로드맵")
+    info("오픈 전 준비부터 5년차 출구전략까지 단계별 핵심 과제와 목표를 정리합니다.")
+
+    st.markdown("""
+<div style="position:relative;margin:20px 0 30px 0;">
+
+<!-- 타임라인 세로선 -->
+<div style="position:absolute;left:24px;top:0;bottom:0;width:3px;background:linear-gradient(180deg,#3b82f6,#22c55e,#f97316,#a855f7,#ef4444);border-radius:2px;"></div>
+
+<!-- Phase 1: 오픈 준비 -->
+<div style="display:flex;gap:20px;margin-bottom:20px;position:relative;">
+<div style="min-width:48px;height:48px;border-radius:50%;background:#1e3a5f;border:3px solid #3b82f6;display:flex;align-items:center;justify-content:center;z-index:1;">
+<span style="color:#60a5fa;font-weight:900;font-size:14px;">P1</span>
+</div>
+<div style="background:#111827;border:1px solid #1e293b;border-radius:12px;padding:18px 22px;flex:1;border-left:3px solid #3b82f6;">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+<span style="color:#60a5fa;font-size:15px;font-weight:800;">오픈 준비</span>
+<span style="color:#64748b;font-size:12px;font-weight:600;background:#1e293b;padding:3px 10px;border-radius:12px;">D-3개월 ~ 오픈일 (2026.03~06)</span>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;color:#cbd5e1;font-size:12.5px;line-height:1.7;">
+<div>
+<div style="color:#94a3b8;font-size:11px;font-weight:700;margin-bottom:4px;">📋 핵심 과제</div>
+• 시설 공사 완료 및 안전 검수<br>
+• 인력 채용 완료 (9명)<br>
+• 사업자 등록, 영업 허가<br>
+• POS/회원관리 시스템 구축<br>
+• 골프존 스크린 5대 설치
+</div>
+<div>
+<div style="color:#94a3b8;font-size:11px;font-weight:700;margin-bottom:4px;">📣 마케팅</div>
+• 네이버 플레이스 등록<br>
+• 블로그 체험단 20명 모집<br>
+• 현수막/배너 5개소 설치<br>
+• 사전등록 이벤트 운영<br>
+• <b>예산: 2,000만원</b>
+</div>
+</div>
+<div style="margin-top:10px;padding-top:8px;border-top:1px solid #1e293b;color:#60a5fa;font-size:12px;font-weight:600;">
+🎯 목표: 사전등록 200명 이상 확보
+</div>
+</div>
+</div>
+
+<!-- Phase 2: 오픈 초기 -->
+<div style="display:flex;gap:20px;margin-bottom:20px;position:relative;">
+<div style="min-width:48px;height:48px;border-radius:50%;background:#14532d;border:3px solid #22c55e;display:flex;align-items:center;justify-content:center;z-index:1;">
+<span style="color:#86efac;font-weight:900;font-size:14px;">P2</span>
+</div>
+<div style="background:#111827;border:1px solid #1e293b;border-radius:12px;padding:18px 22px;flex:1;border-left:3px solid #22c55e;">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+<span style="color:#86efac;font-size:15px;font-weight:800;">오픈 초기 (생존)</span>
+<span style="color:#64748b;font-size:12px;font-weight:600;background:#1e293b;padding:3px 10px;border-radius:12px;">1~6개월 (2026.06~11)</span>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;color:#cbd5e1;font-size:12.5px;line-height:1.7;">
+<div>
+<div style="color:#94a3b8;font-size:11px;font-weight:700;margin-bottom:4px;">📋 핵심 과제</div>
+• 일일/쿠폰 체험 유입 집중<br>
+• 타 연습장 회원권 만료 대기<br>
+• 비수기(7~8월 폭염) 대응<br>
+• 고객 VOC 수집 및 즉시 개선<br>
+• 임대매장(편의점/자판기) 오픈
+</div>
+<div>
+<div style="color:#94a3b8;font-size:11px;font-weight:700;margin-bottom:4px;">📊 KPI</div>
+• 램프업 목표: 정상의 25%→65%<br>
+• 일일/쿠폰 비중 60% 이상<br>
+• 월 매출 목표: 1.5~2억<br>
+• 타석 가동률 40% 이상<br>
+• <b>이 시기 적자는 정상</b>
+</div>
+</div>
+<div style="margin-top:10px;padding-top:8px;border-top:1px solid #1e293b;color:#86efac;font-size:12px;font-weight:600;">
+🎯 목표: 월 회원 400명 돌파, 재방문율 50% 이상
+</div>
+</div>
+</div>
+
+<!-- Phase 3: 안정화 -->
+<div style="display:flex;gap:20px;margin-bottom:20px;position:relative;">
+<div style="min-width:48px;height:48px;border-radius:50%;background:#78350f;border:3px solid #f97316;display:flex;align-items:center;justify-content:center;z-index:1;">
+<span style="color:#fdba74;font-weight:900;font-size:14px;">P3</span>
+</div>
+<div style="background:#111827;border:1px solid #1e293b;border-radius:12px;padding:18px 22px;flex:1;border-left:3px solid #f97316;">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+<span style="color:#fdba74;font-size:15px;font-weight:800;">안정화 (성장)</span>
+<span style="color:#64748b;font-size:12px;font-weight:600;background:#1e293b;padding:3px 10px;border-radius:12px;">7~18개월 (2026.12~2027.11)</span>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;color:#cbd5e1;font-size:12.5px;line-height:1.7;">
+<div>
+<div style="color:#94a3b8;font-size:11px;font-weight:700;margin-bottom:4px;">📋 핵심 과제</div>
+• 회원권 전환 본격화 (1개월→3개월)<br>
+• 재등록률 70% 이상 관리<br>
+• 임대매장 2차 오픈 (스크린골프존)<br>
+• 프로 레슨 프로그램 안정화<br>
+• 비용 효율화 (무인화 확대)
+</div>
+<div>
+<div style="color:#94a3b8;font-size:11px;font-weight:700;margin-bottom:4px;">📊 KPI</div>
+• 연매출 {rev_p[1]/억:.0f}억 목표 (2027F)<br>
+• 영업이익률 흑자 전환<br>
+• 타석 가동률 60% 이상<br>
+• 인건비율 25% 이하<br>
+• <b>2년간 가격 동결 유지</b>
+</div>
+</div>
+<div style="margin-top:10px;padding-top:8px;border-top:1px solid #1e293b;color:#fdba74;font-size:12px;font-weight:600;">
+🎯 목표: 2027F 영업이익 흑자 전환, 재등록률 70%
+</div>
+</div>
+</div>
+
+<!-- Phase 4: 최적화 -->
+<div style="display:flex;gap:20px;margin-bottom:20px;position:relative;">
+<div style="min-width:48px;height:48px;border-radius:50%;background:#581c87;border:3px solid #a855f7;display:flex;align-items:center;justify-content:center;z-index:1;">
+<span style="color:#c4b5fd;font-weight:900;font-size:14px;">P4</span>
+</div>
+<div style="background:#111827;border:1px solid #1e293b;border-radius:12px;padding:18px 22px;flex:1;border-left:3px solid #a855f7;">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+<span style="color:#c4b5fd;font-size:15px;font-weight:800;">최적화 (수익 극대화)</span>
+<span style="color:#64748b;font-size:12px;font-weight:600;background:#1e293b;padding:3px 10px;border-radius:12px;">19~36개월 (2027.12~2029.05)</span>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;color:#cbd5e1;font-size:12.5px;line-height:1.7;">
+<div>
+<div style="color:#94a3b8;font-size:11px;font-weight:700;margin-bottom:4px;">📋 핵심 과제</div>
+• 3년차 첫 요금 인상 (3% 이내)<br>
+• VIP 회원 프로그램 도입<br>
+• 비수기 이벤트 정례화<br>
+• 시설 부분 리모델링 검토<br>
+• 매각/재계약 사전 검토 착수
+</div>
+<div>
+<div style="color:#94a3b8;font-size:11px;font-weight:700;margin-bottom:4px;">📊 KPI</div>
+• EBITDA 이익률 15% 이상<br>
+• 누적 EBITDA {cum_ebitda[2]/억:.0f}억→{cum_ebitda[3]/억:.0f}억<br>
+• 투자회수율 {rec_rate[2]*100:.0f}%→{rec_rate[3]*100:.0f}%<br>
+• 고정 고객 1,500명 이상<br>
+• <b>마진 보호 + 효율 극대화</b>
+</div>
+</div>
+<div style="margin-top:10px;padding-top:8px;border-top:1px solid #1e293b;color:#c4b5fd;font-size:12px;font-weight:600;">
+🎯 목표: EBITDA 이익률 15%+, 안정적 현금 창출
+</div>
+</div>
+</div>
+
+<!-- Phase 5: 출구전략 -->
+<div style="display:flex;gap:20px;position:relative;">
+<div style="min-width:48px;height:48px;border-radius:50%;background:#7f1d1d;border:3px solid #ef4444;display:flex;align-items:center;justify-content:center;z-index:1;">
+<span style="color:#fca5a5;font-weight:900;font-size:14px;">P5</span>
+</div>
+<div style="background:#111827;border:1px solid #1e293b;border-radius:12px;padding:18px 22px;flex:1;border-left:3px solid #ef4444;">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+<span style="color:#fca5a5;font-size:15px;font-weight:800;">출구전략 (매각/명도)</span>
+<span style="color:#64748b;font-size:12px;font-weight:600;background:#1e293b;padding:3px 10px;border-radius:12px;">37~60개월 (2029.06~2031.05)</span>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;color:#cbd5e1;font-size:12.5px;line-height:1.7;">
+<div>
+<div style="color:#94a3b8;font-size:11px;font-weight:700;margin-bottom:4px;">📋 시나리오 A: 매각</div>
+• 예상 매각가: EBITDA × 3~5배<br>
+• 회원 DB 및 고객 자산 정리<br>
+• 시설 상태 점검, 리모델링<br>
+• 복수 매수인 접촉 (D-12개월)<br>
+• <b>권리금 + 누적이익 회수</b>
+</div>
+<div>
+<div style="color:#94a3b8;font-size:11px;font-weight:700;margin-bottom:4px;">📋 시나리오 B: 명도</div>
+• 임대매장 명도 (직영→즉시가능)<br>
+• 스크린골프 FC 계약 해지 (1~2월)<br>
+• 프로 레슨 계약 종료 통보 (D-6개월)<br>
+• 시설물 감가상각 후 잔존가 확인<br>
+• <b>보증금 회수 + 잔여 현금</b>
+</div>
+</div>
+<div style="margin-top:10px;padding-top:8px;border-top:1px solid #1e293b;color:#fca5a5;font-size:12px;font-weight:600;">
+🎯 목표: 누적 EBITDA {cum_ebitda[-1]/억:.0f}억 + 매각가로 투자금 {inv_won/억:.0f}억 전액 회수
+</div>
+</div>
+</div>
+
+</div>
+""", unsafe_allow_html=True)
+
+    # 로드맵 요약 테이블
+    subsec("실행 로드맵 요약")
+    roadmap_data = {
+        '단계': ['P1 오픈 준비', 'P2 오픈 초기', 'P3 안정화', 'P4 최적화', 'P5 출구전략'],
+        '기간': ['D-3개월~오픈', '1~6개월', '7~18개월', '19~36개월', '37~60개월'],
+        '핵심 목표': ['사전등록 200명', '월 회원 400명', f'연매출 {rev_p[1]/억:.0f}억', 'EBITDA 15%+', f'누적 {cum_ebitda[-1]/억:.0f}억 회수'],
+        '예상 매출': ['-', f'월 1.5~2억', f'연 {rev_p[1]/억:.0f}억', f'연 {rev_p[2]/억:.0f}억', f'연 {rev_p[4]/억:.0f}억'],
+        '손익': ['투자 집행', '적자 (정상)', '흑자 전환', '이익 극대화', '매각/명도'],
+        '핵심 리스크': ['공사 지연', '고객유입 부진', '재등록률 하락', '경쟁 심화', '매각가 하락'],
+    }
+    dark_table(pd.DataFrame(roadmap_data))
 
 # ═══ TAB 4: Revenue ═══
 if _ti == 4:
@@ -2797,7 +3439,7 @@ if _ti == 4:
         info("**2026F~2030F 5개년** Excel 재무모델 기반 매출 항목별 누적 차트입니다. 각 색상이 상품을 나타내며, 전체 높이가 해당 연도 총 매출입니다.")
         fig = go.Figure()
         for idx, (n, v) in enumerate(D['rev_items'].items()):
-            fig.add_trace(go.Bar(name=n, x=D['yp'], y=[x/억 for x in v], marker_color=PAL[idx%len(PAL)]))
+            fig.add_trace(go.Bar(name=n, x=[str(y) for y in D['yp']], y=[x/억 for x in v], marker_color=PAL[idx%len(PAL)]))
         lo(fig, title='매출 항목별 5개년 추이 (억원)', barmode='stack', height=420, yaxis_title='억원')
         st.plotly_chart(fig)
 
@@ -2845,9 +3487,9 @@ if _ti == 5:
     with c2:
         info("비용을 고정비·준변동비·변동비로 분류한 누적 막대입니다. 고정비 비중이 클수록 매출 변동에 따른 손익 민감도가 높아집니다.")
         fig = go.Figure()
-        fig.add_trace(go.Bar(name='고정비', x=['2026F'], y=[fixed_total/억], marker_color=C['red']))
-        fig.add_trace(go.Bar(name='준변동비', x=['2026F'], y=[semi_cost_yr*0.6/억], marker_color=C['orange']))
-        fig.add_trace(go.Bar(name='변동비', x=['2026F'], y=[var_total/억], marker_color=C['yellow']))
+        fig.add_trace(go.Bar(name='고정비', x=['2026년'], y=[fixed_total/억], marker_color=C['red']))
+        fig.add_trace(go.Bar(name='준변동비', x=['2026년'], y=[semi_total*0.6/억], marker_color=C['orange']))
+        fig.add_trace(go.Bar(name='변동비', x=['2026년'], y=[var_total/억], marker_color=C['yellow']))
         lo(fig, title='고정비 vs 변동비 구조 (억원)', barmode='stack', height=420, yaxis_title='억원')
         st.plotly_chart(fig)
 
@@ -2855,7 +3497,7 @@ if _ti == 5:
     info("5개년간 비용 항목별 변동 추이입니다. 인건비·임대료 상승률이 매출 성장률을 초과하면 수익성이 악화됩니다.")
     fig_ct = go.Figure()
     for idx, (n, v) in enumerate(D['cost_items'].items()):
-        fig_ct.add_trace(go.Bar(name=n, x=D['yp'], y=[x/억 for x in v], marker_color=PAL[idx%len(PAL)]))
+        fig_ct.add_trace(go.Bar(name=n, x=[str(y) for y in D['yp']], y=[x/억 for x in v], marker_color=PAL[idx%len(PAL)]))
     lo(fig_ct, title='비용 항목별 5개년 누적 추이 (억원)', barmode='stack', height=420, yaxis_title='억원')
     st.plotly_chart(fig_ct)
 
@@ -2891,24 +3533,18 @@ if _ti == 6:
         subsec("월별 매출 vs 비용 (2026, 현실 보정)")
         info("오픈 초기 현실을 반영한 월별 추정입니다. 6월=오픈월(인지도 없음, 장마 시작), 7~8월=폭염 비수기, 9~10월=성수기+인지도 상승, 11~12월=기온 하락, 1~2월=겨울 비수기.")
         # 현실 보정: 오픈초기+계절성+고객전환지연 반영
-        # mrev_custom는 Excel 정상가동 기준이므로, 오픈 첫해 보정계수 적용
-        monthly_adj = [0.35, 0.40, 0.50, 0.75, 0.90, 0.55, 0.45, 0.40, 0.50]  # 6~2월
-        # 6월: 오픈+장마=35%, 7월: 장마+더위=40%, 8월: 폭염=50%, 9월: 성수기시작=75%, 10월: 최성수기=90%
-        # 11월: 기온하락=55%, 12월: 겨울=45%, 1월: 한파=40%, 2월: 설+준비기=50%
-        adj_mrev = [int(v * a) for v, a in zip(mrev_custom, monthly_adj)]
-        # 비용은 고정비 위주라 매출과 무관하게 발생 (다만 오픈초기 약간 낮음)
-        cost_adj = [0.90, 0.95, 0.95, 1.0, 1.0, 1.0, 1.0, 1.0, 0.95]
-        adj_mcost = [int(v * a) for v, a in zip(mcost_custom, cost_adj)]
-
+        # mrev_custom은 이미 시즌×램프업×상권×경제 보정 적용됨 (이중 적용 방지)
         fig = go.Figure()
-        fig.add_trace(go.Bar(name='매출(보정)', x=D['months'], y=[v/1e6 for v in adj_mrev], marker_color=C['blue']))
-        fig.add_trace(go.Bar(name='비용(보정)', x=D['months'], y=[v/1e6 for v in adj_mcost], marker_color=C['red']))
-        lo(fig, title='월별 매출 vs 비용 — 오픈 첫해 보정 (백만원)', barmode='group', height=440, yaxis_title='백만원')
+        fig.add_trace(go.Bar(name='매출', x=D['months'], y=[v/1e6 for v in mrev_custom], marker_color=C['blue'],
+            text=[f"{v/1e6:.0f}" for v in mrev_custom], textposition='inside', textfont=dict(size=11, color='white')))
+        fig.add_trace(go.Bar(name='비용', x=D['months'], y=[v/1e6 for v in mcost_custom], marker_color=C['red'],
+            text=[f"{v/1e6:.0f}" for v in mcost_custom], textposition='inside', textfont=dict(size=11, color='white')))
+        lo(fig, title='월별 매출 vs 비용 (백만원, 컨트롤패널 연동)', barmode='group', height=440, yaxis_title='백만원')
         st.plotly_chart(fig)
     with c2:
         subsec("월별 손익 & 누적 (보정)")
         info("보정된 월별 손익(매출-비용)과 누적 추이입니다. 오픈 초기에는 비용이 매출을 초과하여 적자가 누적되며, 성수기(9~10월)에 일부 회복됩니다.")
-        mpl = [r-c for r,c in zip(adj_mrev, adj_mcost)]
+        mpl = [r-c for r,c in zip(mrev_custom, mcost_custom)]
         cum_m = []; c_=0
         for v in mpl: c_+=v; cum_m.append(c_)
         fig2 = go.Figure()
@@ -2953,7 +3589,7 @@ if _ti == 6:
         subsec("비용구조 워터폴")
         info("고정비에서 시작하여 준변동비, 변동비를 더한 총비용과 매출을 비교하는 워터폴 차트입니다. 최종 영업이익이 양(+)이면 흑자입니다.")
         fig = go.Figure(go.Waterfall(x=["고정비","준변동비(60%F)","변동비","총비용","매출(2026F)","영업이익"],
-            y=[fixed_total/억, semi_cost_yr*0.6/억, var_total/억, 0, rev_p[0]/억 if rev_p[0] else 0, 0],
+            y=[fixed_total/억, semi_total*0.6/억, var_total/억, 0, rev_p[0]/억 if rev_p[0] else 0, 0],
             measure=["absolute","relative","relative","total","absolute","total"],
             connector={"line":{"color":C['slate']}}, decreasing={"marker":{"color":C['red']}}, increasing={"marker":{"color":C['green']}}, totals={"marker":{"color":C['blue']}}))
         lo(fig, title='비용구조 워터폴 (억원)', height=420)
@@ -2982,8 +3618,8 @@ if _ti == 7:
 
     c1, c2 = st.columns(2)
     with c1:
-        subsec("DCF 할인현금흐름")
-        info("각 연도의 EBITDA를 할인율로 나눈 현재가치(PV)를 산출합니다. 합계에서 투자금을 차감하면 NPV입니다.")
+        subsec(f"DCF 할인현금흐름 (할인율 {disc_r*100:.0f}%)")
+        info(f"각 연도의 세후FCF를 할인율({disc_r*100:.0f}%)로 현재가치 환산합니다. 할인율 = 무위험수익률(은행 3~4%) + 사업리스크(3~4%) + 유동성프리미엄(2~3%). IRR이 할인율보다 높으면 은행 예금보다 투자 수익이 우수합니다.")
         dcf = []
         for i, yr in enumerate(D['yp']):
             pv = ebitda_p[i]/(1+disc_r)**(i+1)
@@ -2994,7 +3630,7 @@ if _ti == 7:
         subsec("투자회수 추이")
         info("누적 EBITDA가 투자금(빨간 점선)에 도달하는 시점이 투자 회수 완료 시점입니다. 초록 영역이 넓을수록 빠른 회수를 의미합니다.")
         fig = go.Figure()
-        fig.add_trace(go.Scatter(name='누적', x=D['yp'], y=[c/억 for c in cum_ebitda], mode='lines+markers', line=dict(color=C['green'], width=3), fill='tozeroy', fillcolor='rgba(34,197,94,0.1)'))
+        fig.add_trace(go.Scatter(name='누적', x=[str(y) for y in D['yp']], y=[c/억 for c in cum_ebitda], mode='lines+markers', line=dict(color=C['green'], width=3), fill='tozeroy', fillcolor='rgba(34,197,94,0.1)'))
         fig.add_hline(y=s_inv, line_dash="dash", line_color=C['red'], annotation_text=f"투자금 {s_inv}억", annotation_font_size=11)
         lo(fig, title='누적 EBITDA vs 투자금 (억원)', height=420, yaxis_title='억원')
         st.plotly_chart(fig)
@@ -3033,8 +3669,8 @@ if _ti == 8:
             tax=max(op_p[i]*s_tax_rate,0)
             f=ebitda_p[i]+rent_inc-tax; cf_v.append(f); cc_f+=f; cum_cf.append(cc_f)
         fig=go.Figure()
-        fig.add_trace(go.Bar(name='FCF', x=D['yp'], y=[v/억 for v in cf_v], marker_color=[C['green'] if v>=0 else C['red'] for v in cf_v]))
-        fig.add_trace(go.Scatter(name='누적', x=D['yp'], y=[v/억 for v in cum_cf], mode='lines+markers', line=dict(color=C['orange'], width=3)))
+        fig.add_trace(go.Bar(name='FCF', x=[str(y) for y in D['yp']], y=[v/억 for v in cf_v], marker_color=[C['green'] if v>=0 else C['red'] for v in cf_v]))
+        fig.add_trace(go.Scatter(name='누적', x=[str(y) for y in D['yp']], y=[v/억 for v in cum_cf], mode='lines+markers', line=dict(color=C['orange'], width=3)))
         fig.add_hline(y=0, line_dash="dash", line_color="#cbd5e1")
         lo(fig, title='연도별 FCF 및 누적 추이 (억원)', height=420, yaxis_title='억원')
         st.plotly_chart(fig)
@@ -3106,11 +3742,11 @@ if _ti == 9:
     with c1:
         info("5개년간 임대수익 구성요소별 전망입니다. 임대료 인상률과 매출배분 성장을 반영하며, 검정선이 총 임대수익 추이입니다.")
         fig = go.Figure()
-        fig.add_trace(go.Bar(name='외부 임대료', x=D['yp'], y=[r['외부']/억 for r in rent_5yr], marker_color=C['blue']))
-        fig.add_trace(go.Bar(name='계열사 임대료', x=D['yp'], y=[r['계열사']/억 for r in rent_5yr], marker_color=C['orange']))
-        fig.add_trace(go.Bar(name='매출배분', x=D['yp'], y=[v/억 for v in aff_rev_share_income], marker_color=C['green']))
+        fig.add_trace(go.Bar(name='외부 임대료', x=[str(y) for y in D['yp']], y=[r['외부']/억 for r in rent_5yr], marker_color=C['blue']))
+        fig.add_trace(go.Bar(name='계열사 임대료', x=[str(y) for y in D['yp']], y=[r['계열사']/억 for r in rent_5yr], marker_color=C['orange']))
+        fig.add_trace(go.Bar(name='매출배분', x=[str(y) for y in D['yp']], y=[v/억 for v in aff_rev_share_income], marker_color=C['green']))
         total_rental_income = [rent_5yr[i]['합계'] + aff_rev_share_income[i] for i in range(5)]
-        fig.add_trace(go.Scatter(name='총 임대수익', x=D['yp'], y=[v/억 for v in total_rental_income],
+        fig.add_trace(go.Scatter(name='총 임대수익', x=[str(y) for y in D['yp']], y=[v/억 for v in total_rental_income],
                                  mode='lines+markers', line=dict(color=C['dark'], width=3), marker=dict(size=8)))
         lo(fig, title='5개년 임대수익 전망 (억원)', barmode='stack', height=420, yaxis_title='억원')
         st.plotly_chart(fig)
@@ -3339,12 +3975,114 @@ if _ti == 10:
         lo(fig, title='경쟁 포지셔닝 비교 레이더', height=420, polar=dict(bgcolor='#111827', radialaxis=dict(range=[0,100], gridcolor='#1e293b', linecolor='#334155', tickfont=dict(color='#64748b')), angularaxis=dict(gridcolor='#1e293b', linecolor='#334155', tickfont=dict(color='#94a3b8'))))
         st.plotly_chart(fig)
     with c2:
-        subsec("요금 비교 (1개월 남성)")
-        info("1개월 남성 기준 월 회비를 경쟁사 및 서울 평균과 비교합니다. 등촌은 서울 평균 대비 저렴한 가격 전략을 채택하고 있습니다.")
-        fig = go.Figure(go.Bar(x=['등촌(2026)','제니스 정상','제니스 주간','마곡나루','서울평균'],
-            y=[29,33,30,35,31], marker_color=[C['blue'],C['red'],C['red_l'],C['orange'],C['slate']],
-            text=['29만','33만','30만','35만','31만'], textposition='inside', textfont=dict(size=12, color='white')))
-        lo(fig, title='월 회비 비교 (만원)', height=420, yaxis_title='만원')
+        subsec("서울 실외 연습장 요금 비교 (실제 확인 데이터)")
+        info("웹에서 직접 확인된 서울 실외 연습장 실제 요금입니다. 동도센트리움/목동골프타운은 홈페이지 접속 불가로 전화 확인 필요.")
+
+        # 실제 확인된 데이터만 사용 (출처 명시)
+        comp_html = """
+<table style="width:100%;border-collapse:collapse;font-size:12px;margin:8px 0;">
+<tr>
+<th style="background:#1e293b;color:#60a5fa;padding:8px;text-align:left;border-bottom:2px solid #334155;">연습장</th>
+<th style="background:#1e293b;color:#60a5fa;padding:8px;text-align:left;border-bottom:2px solid #334155;">위치</th>
+<th style="background:#1e293b;color:#60a5fa;padding:8px;text-align:center;border-bottom:2px solid #334155;">타석</th>
+<th style="background:#1e293b;color:#60a5fa;padding:8px;text-align:right;border-bottom:2px solid #334155;">1개월 종일</th>
+<th style="background:#1e293b;color:#60a5fa;padding:8px;text-align:right;border-bottom:2px solid #334155;">3개월 종일</th>
+<th style="background:#1e293b;color:#60a5fa;padding:8px;text-align:right;border-bottom:2px solid #334155;">일일(주중)</th>
+<th style="background:#1e293b;color:#60a5fa;padding:8px;text-align:left;border-bottom:2px solid #334155;">출처</th>
+</tr>
+<tr style="background:#0f2a1e;">
+<td style="color:#86efac;padding:7px 8px;font-weight:700;border-bottom:1px solid #1e293b;">등촌(2026)</td>
+<td style="color:#86efac;padding:7px 8px;border-bottom:1px solid #1e293b;">강서구</td>
+<td style="color:#86efac;padding:7px 8px;text-align:center;border-bottom:1px solid #1e293b;">88</td>
+<td style="color:#86efac;padding:7px 8px;text-align:right;font-weight:700;border-bottom:1px solid #1e293b;">290,000</td>
+<td style="color:#86efac;padding:7px 8px;text-align:right;font-weight:700;border-bottom:1px solid #1e293b;">800,000</td>
+<td style="color:#86efac;padding:7px 8px;text-align:right;font-weight:700;border-bottom:1px solid #1e293b;">23,000</td>
+<td style="color:#94a3b8;padding:7px 8px;font-size:10px;border-bottom:1px solid #1e293b;">컨트롤패널</td>
+</tr>
+<tr>
+<td style="color:#fca5a5;padding:7px 8px;font-weight:700;border-bottom:1px solid #1e293b;">제니스</td>
+<td style="color:#e2e8f0;padding:7px 8px;border-bottom:1px solid #1e293b;">구로구 고척동</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:center;border-bottom:1px solid #1e293b;">112</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">300,000</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">830,000</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">24,000</td>
+<td style="color:#94a3b8;padding:7px 8px;font-size:10px;border-bottom:1px solid #1e293b;">사용자 제공</td>
+</tr>
+<tr style="background:#111827;">
+<td style="color:#e2e8f0;padding:7px 8px;font-weight:600;border-bottom:1px solid #1e293b;">메이필드호텔</td>
+<td style="color:#e2e8f0;padding:7px 8px;border-bottom:1px solid #1e293b;">강서구</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:center;border-bottom:1px solid #1e293b;">75</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">322,000</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">795,000</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">22,000(60분)</td>
+<td style="color:#94a3b8;padding:7px 8px;font-size:10px;border-bottom:1px solid #1e293b;">mayfield.co.kr</td>
+</tr>
+<tr>
+<td style="color:#e2e8f0;padding:7px 8px;font-weight:600;border-bottom:1px solid #1e293b;">쇼골프타운</td>
+<td style="color:#e2e8f0;padding:7px 8px;border-bottom:1px solid #1e293b;">강서구</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:center;border-bottom:1px solid #1e293b;">183</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">230,000(주중)</td>
+<td style="color:#94a3b8;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">-</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">16,800~22,000</td>
+<td style="color:#94a3b8;padding:7px 8px;font-size:10px;border-bottom:1px solid #1e293b;">김캐디</td>
+</tr>
+<tr style="background:#111827;">
+<td style="color:#e2e8f0;padding:7px 8px;font-weight:600;border-bottom:1px solid #1e293b;">88CC</td>
+<td style="color:#e2e8f0;padding:7px 8px;border-bottom:1px solid #1e293b;">영등포구</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:center;border-bottom:1px solid #1e293b;">-</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">200,000</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">590,000</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">19,000(60분)</td>
+<td style="color:#94a3b8;padding:7px 8px;font-size:10px;border-bottom:1px solid #1e293b;">88countryclub.co.kr</td>
+</tr>
+<tr>
+<td style="color:#e2e8f0;padding:7px 8px;font-weight:600;border-bottom:1px solid #1e293b;">엑스골프 장한평</td>
+<td style="color:#e2e8f0;padding:7px 8px;border-bottom:1px solid #1e293b;">성동구</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:center;border-bottom:1px solid #1e293b;">72</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">250,000(주중)</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">560,000</td>
+<td style="color:#e2e8f0;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">18,000~19,000</td>
+<td style="color:#94a3b8;padding:7px 8px;font-size:10px;border-bottom:1px solid #1e293b;">김캐디</td>
+</tr>
+<tr style="background:#111827;">
+<td style="color:#94a3b8;padding:7px 8px;font-weight:600;border-bottom:1px solid #1e293b;">동도센트리움</td>
+<td style="color:#94a3b8;padding:7px 8px;border-bottom:1px solid #1e293b;">구로구 오류동</td>
+<td style="color:#94a3b8;padding:7px 8px;text-align:center;border-bottom:1px solid #1e293b;">124</td>
+<td style="color:#fbbf24;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">전화확인필요</td>
+<td style="color:#fbbf24;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">전화확인필요</td>
+<td style="color:#fbbf24;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">전화확인필요</td>
+<td style="color:#94a3b8;padding:7px 8px;font-size:10px;border-bottom:1px solid #1e293b;">02-2060-0707</td>
+</tr>
+<tr>
+<td style="color:#94a3b8;padding:7px 8px;font-weight:600;border-bottom:1px solid #1e293b;">목동골프타운</td>
+<td style="color:#94a3b8;padding:7px 8px;border-bottom:1px solid #1e293b;">양천구</td>
+<td style="color:#94a3b8;padding:7px 8px;text-align:center;border-bottom:1px solid #1e293b;">-</td>
+<td style="color:#fbbf24;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">전화확인필요</td>
+<td style="color:#fbbf24;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">전화확인필요</td>
+<td style="color:#fbbf24;padding:7px 8px;text-align:right;border-bottom:1px solid #1e293b;">전화확인필요</td>
+<td style="color:#94a3b8;padding:7px 8px;font-size:10px;border-bottom:1px solid #1e293b;">02-2605-5966</td>
+</tr>
+<tr style="background:#1e293b;">
+<td style="color:#fbbf24;padding:8px;font-weight:700;border-bottom:2px solid #334155;" colspan="3">서울 전체 평균 (1,519개소)</td>
+<td style="color:#fbbf24;padding:8px;text-align:right;font-weight:700;border-bottom:2px solid #334155;">239,911</td>
+<td style="color:#94a3b8;padding:8px;text-align:right;border-bottom:2px solid #334155;">-</td>
+<td style="color:#fbbf24;padding:8px;text-align:right;font-weight:700;border-bottom:2px solid #334155;">20,681(60분)</td>
+<td style="color:#94a3b8;padding:8px;font-size:10px;border-bottom:2px solid #334155;">김캐디 2023</td>
+</tr>
+</table>
+<div style="color:#64748b;font-size:11px;margin-top:4px;">※ 마포구·서대문구: 대형 실외 연습장 없음 (실내/스크린만 존재) | 모든 금액 VAT 포함 | 2024~2025년 확인 기준, 2026년 인상 가능성 있음</div>
+"""
+        st.markdown(comp_html, unsafe_allow_html=True)
+
+        # 차트도 실제 데이터로 교체
+        fig = go.Figure(go.Bar(
+            x=['등촌<br>(2026)', '제니스<br>(구로)', '메이필드<br>(강서)', '쇼골프<br>(강서)', '88CC<br>(영등포)', '엑스골프<br>(성동)'],
+            y=[29, 30, 32.2, 23, 20, 25],
+            marker_color=[C['blue'], C['red'], C['orange'], C['green'], C['purple'], C['cyan']],
+            text=['29만', '30만', '32.2만', '23만', '20만', '25만'],
+            textposition='inside', textfont=dict(size=13, color='white'),
+            hovertemplate='%{x}: %{y}만원<extra></extra>'))
+        lo(fig, title='1개월 종일 남성 요금 비교 (만원, 각 연습장 홈페이지/김캐디 확인)', height=380, yaxis_title='만원')
         st.plotly_chart(fig)
 
     # ── SWOT ──
@@ -3358,9 +4096,9 @@ if _ti == 10:
     info(f"상권점수 {ta_score:.1f}점 → 매출 보정 ×{ta_rev_adj:.2f} | 경제환경 {econ_score:.1f}점 → 매출 보정 ×{econ_rev_adj:.2f} | **종합 보정: ×{combined_adj:.2f}**")
     adj_rev_by_ta = [r * combined_adj for r in rev_p]
     fig = go.Figure()
-    fig.add_trace(go.Bar(name='기본 매출', x=D['yp'], y=[r/억 for r in rev_p], marker_color=C['blue_l']))
-    fig.add_trace(go.Bar(name='보정 매출', x=D['yp'], y=[r/억 for r in adj_rev_by_ta], marker_color=C['blue']))
-    fig.add_trace(go.Scatter(name='차이', x=D['yp'], y=[(a-b)/억 for a,b in zip(adj_rev_by_ta, rev_p)],
+    fig.add_trace(go.Bar(name='기본 매출', x=[str(y) for y in D['yp']], y=[r/억 for r in rev_p], marker_color=C['blue_l']))
+    fig.add_trace(go.Bar(name='보정 매출', x=[str(y) for y in D['yp']], y=[r/억 for r in adj_rev_by_ta], marker_color=C['blue']))
+    fig.add_trace(go.Scatter(name='차이', x=[str(y) for y in D['yp']], y=[(a-b)/억 for a,b in zip(adj_rev_by_ta, rev_p)],
         mode='lines+markers', line=dict(color=C['green'] if combined_adj >= 1 else C['red'], width=2)))
     lo(fig, title='상권·경제 보정 전후 매출 비교 (억원)', barmode='group', height=420, yaxis_title='억원')
     st.plotly_chart(fig)
@@ -3615,14 +4353,27 @@ if False:  # Tab removed from navigation
 
     with c2:
         subsec("시간대별 추정 가동률")
-        info("시간대별 타석 가동률 추정치입니다. 가동률 70% 이상이 수익성 확보 기준이며, 저조한 시간대는 할인 프로모션 등으로 개선이 필요합니다.")
+        warn("⚠️ 업계 일반 패턴 기반 추정치. KGA 2023: '평일 저녁(18~20시)' 24.0% 최다. 막대에 마우스를 올리면 추정 근거가 표시됩니다.")
         hours = ['06-08', '08-10', '10-12', '12-14', '14-16', '16-18', '18-20', '20-23']
-        usage = [30, 55, 85, 70, 60, 75, 95, 80]  # 추정 가동률
+        usage = [30, 55, 85, 70, 60, 75, 95, 80]
+        reasons = [
+            '새벽/조조: 소수 열성 회원만 이용<br>KGA: 오전 초반 이용 비율 8% 미만',
+            '오전: 은퇴자/주부층 유입 시작<br>모닝권 회원 중심 이용 시간대',
+            '오전~점심: 주부/자영업자 피크<br>모닝권+종일권 중복 이용 구간',
+            '점심~오후: 식사 시간 소폭 감소<br>오전 피크 후 자연 감소 구간',
+            '오후: 직장인 퇴근 전 소강<br>주중 가장 낮은 이용 구간 중 하나',
+            '저녁 준비: 퇴근 후 이용 시작<br>KGA: 평일 저녁 이용 24.0%의 시작점',
+            '피크타임: 직장인 퇴근 후 최대<br>KGA 2023: 평일 저녁 24.0% 최다',
+            '야간: 피크 후 점차 감소<br>23시 마감 전까지 꾸준한 이용',
+        ]
         fig = go.Figure(go.Bar(x=hours, y=usage,
             marker_color=[C['red'] if u < 50 else C['orange'] if u < 70 else C['green'] for u in usage],
-            text=[f"{u}%" for u in usage], textposition='inside', textfont=dict(size=12, color='#e2e8f0')))
+            text=[f"{u}%" for u in usage], textposition='inside', textfont=dict(size=12, color='#e2e8f0'),
+            customdata=reasons,
+            hovertemplate='<b>%{x}</b><br>가동률: %{y}%<br><br>%{customdata}<extra></extra>'))
         fig.add_hline(y=70, line_dash="dash", line_color=C['slate'], annotation_text="목표 70%", annotation_font_size=11)
-        lo(fig, title='시간대별 타석 가동률 (%)', height=420, yaxis_title='%', yaxis_range=[0,110])
+        lo(fig, title='시간대별 타석 가동률 (%) — 막대 호버 시 추정 근거 표시', height=420, yaxis_title='%', yaxis_range=[0,110])
+        fig.update_layout(hovermode='closest', hoverlabel=dict(bgcolor='#0f172a', bordercolor='#334155', font=dict(size=13, color='#e2e8f0')))
         st.plotly_chart(fig)
 
     # ── 경영 대시보드 체크리스트 ──
@@ -3910,7 +4661,7 @@ if _ti == 12:
     }
     dark_table(pd.DataFrame(sim_data))
 
-st.markdown('<div class="footer">⛳ 신진(SJ) 등촌골프연습장 사업성 분석 v5.0 &nbsp;|&nbsp; 88타석 실외 &nbsp;|&nbsp; ₩20억 투자 &nbsp;|&nbsp; 2026.06 오픈 &nbsp;|&nbsp; 13개 분석 모듈</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="footer">⛳ 신진(SJ) 등촌골프연습장 사업성 분석 v5.0 &nbsp;|&nbsp; {s_bays}타석 실외 &nbsp;|&nbsp; ₩{s_inv}억 투자 &nbsp;|&nbsp; 2026.06 오픈 &nbsp;|&nbsp; 13개 분석 모듈</div>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════
 # Auto-Save: 모든 위젯 값을 JSON으로 자동 저장
