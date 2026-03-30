@@ -193,6 +193,36 @@ div[data-testid="stRadio"] > div > label:hover {
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-track { background: #0b1120; }
 ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+
+/* ── 프린트 전용 스타일 ── */
+@media print {
+    @page { margin: 15mm; }
+    body, .stApp { background: white !important; color: #1e293b !important; }
+    section[data-testid="stSidebar"] { display: none !important; }
+    div[data-testid="stToolbar"] { display: none !important; }
+    header[data-testid="stHeader"] { display: none !important; }
+    .stButton, .stDownloadButton, .stSelectbox { display: none !important; }
+    div[data-testid="stRadio"] { display: none !important; }
+    /* 내용 끊김 방지 */
+    .sec-header, .sub-sec, .info-box, .warn-box, table, .chart-wrap {
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+    }
+    /* 차트 컨테이너 */
+    div[data-testid="stPlotlyChart"] {
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+    }
+    /* 다크 테마 → 라이트 테마 전환 */
+    .sec-header { background: #1e293b !important; color: white !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .kpi-card { border: 1px solid #cbd5e1 !important; background: white !important; }
+    .kpi-val { color: #0f172a !important; }
+    .info-box { border-color: #3b82f6 !important; background: #eff6ff !important; color: #1e3a5f !important; -webkit-print-color-adjust: exact; }
+    table th { background: #1e293b !important; color: white !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    table td { color: #1e293b !important; border-color: #e2e8f0 !important; }
+    /* 페이지 헤더/푸터 */
+    .hero-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
 </style>""", unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════
@@ -279,6 +309,221 @@ def generate_csv_summary(D, rev_p, cost_p, op_p, ebitda_p, margins, rec_rate):
             '투자회수율(%)': round(rec_rate[i]*100, 1)
         })
     return pd.DataFrame(rows).to_csv(index=False, encoding='utf-8-sig')
+
+
+def generate_pdf_report(D, rev_p, cost_p, op_p, ebitda_p, cum_ebitda, margins, rec_rate, inv_won, paper_size='A4'):
+    """PDF 보고서 생성 — 용지 크기별 지원"""
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, A3, B4, B3, landscape
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    import io
+
+    sizes = {'A4': A4, 'A3': A3, 'B4': (250*mm, 353*mm), 'B3': (353*mm, 500*mm)}
+    ps = sizes.get(paper_size, A4)
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=ps, leftMargin=20*mm, rightMargin=20*mm, topMargin=15*mm, bottomMargin=15*mm)
+
+    # 한글 폰트 시도
+    try:
+        pdfmetrics.registerFont(TTFont('NanumGothic', 'NanumGothic.ttf'))
+        fn = 'NanumGothic'
+    except Exception:
+        try:
+            pdfmetrics.registerFont(TTFont('Malgun', 'C:/Windows/Fonts/malgun.ttf'))
+            fn = 'Malgun'
+        except Exception:
+            fn = 'Helvetica'
+
+    styles = getSampleStyleSheet()
+    title_s = ParagraphStyle('Title_KR', parent=styles['Title'], fontName=fn, fontSize=18, spaceAfter=10, textColor=colors.HexColor('#1e293b'))
+    head_s = ParagraphStyle('Head_KR', parent=styles['Heading2'], fontName=fn, fontSize=13, spaceBefore=14, spaceAfter=6, textColor=colors.HexColor('#1e3a5f'))
+    body_s = ParagraphStyle('Body_KR', parent=styles['Normal'], fontName=fn, fontSize=9, leading=13, textColor=colors.HexColor('#334155'))
+    억 = 100_000_000
+
+    elements = []
+    elements.append(Paragraph('등촌골프연습장 사업성 분석 보고서', title_s))
+    elements.append(Paragraph(f'88타석 실외 | 투자금 {inv_won/억:.0f}억원 | 2026.06 재오픈 | {paper_size} 출력', body_s))
+    elements.append(Spacer(1, 8*mm))
+
+    # 핵심 KPI
+    elements.append(Paragraph('1. 핵심 투자 지표', head_s))
+    npv = sum(e/(1+0.1)**(i+1) for i,e in enumerate(ebitda_p)) - inv_won
+    kpi_data = [
+        ['지표', '값', '설명'],
+        ['투자금', f'{inv_won/억:.0f}억', '총 투자금'],
+        ['NPV', f'{npv/억:.1f}억', '순현재가치 (할인율 10%)'],
+        ['IRR', f'{rec_rate[-1]*100:.1f}%↑', '내부수익률'],
+        ['회수율', f'{rec_rate[-1]*100:.1f}%', '5년 누적EBITDA/투자금'],
+        ['누적EBITDA', f'{cum_ebitda[-1]/억:.1f}억', '5년 합계'],
+    ]
+    t = Table(kpi_data, colWidths=[80, 80, 250])
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1e293b')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('FONTNAME', (0,0), (-1,-1), fn),
+        ('FONTSIZE', (0,0), (-1,-1), 9),
+        ('ALIGN', (1,0), (1,-1), 'RIGHT'),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#e2e8f0')),
+        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#f8fafc')]),
+        ('TOPPADDING', (0,0), (-1,-1), 6),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+    ]))
+    elements.append(t)
+    elements.append(Spacer(1, 6*mm))
+
+    # 5개년 손익
+    elements.append(Paragraph('2. 5개년 손익 추정', head_s))
+    yp = D['yp']
+    pl_data = [['항목'] + yp]
+    for name, vals in [('매출', rev_p), ('비용', cost_p), ('영업이익', op_p), ('EBITDA', ebitda_p)]:
+        pl_data.append([name] + [f'{v/억:.1f}억' for v in vals])
+    pl_data.append(['영업이익률'] + [f'{m:.1f}%' for m in margins])
+    pl_data.append(['회수율'] + [f'{r*100:.1f}%' for r in rec_rate])
+
+    col_w = [70] + [75]*len(yp)
+    t2 = Table(pl_data, colWidths=col_w)
+    t2.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1e293b')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('FONTNAME', (0,0), (-1,-1), fn),
+        ('FONTSIZE', (0,0), (-1,-1), 9),
+        ('ALIGN', (1,0), (-1,-1), 'RIGHT'),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#e2e8f0')),
+        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#f8fafc')]),
+        ('TOPPADDING', (0,0), (-1,-1), 5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+    ]))
+    elements.append(t2)
+    elements.append(Spacer(1, 6*mm))
+
+    # 투자 판단
+    elements.append(Paragraph('3. 투자 판단', head_s))
+    if npv > 0:
+        verdict = '투자적합 — NPV 양수, 할인율 기준 투자 수익 확보'
+    elif rec_rate[-1] > 0.6:
+        verdict = f'조건부 검토 — NPV {npv/억:.1f}억(음수)이나 5년 회수율 {rec_rate[-1]*100:.0f}%로 회수 가능성 있음'
+    else:
+        verdict = f'신중검토 필요 — NPV {npv/억:.1f}억, 회수율 {rec_rate[-1]*100:.0f}%'
+    elements.append(Paragraph(verdict, body_s))
+    elements.append(Spacer(1, 4*mm))
+    elements.append(Paragraph('※ 본 보고서는 내부 검토용이며, 외부 배포 시 사전 승인이 필요합니다.', body_s))
+    elements.append(Paragraph(f'신진(SJ) 등촌골프연습장 사업성 분석 | {paper_size} | 작성일: 2026년 3월', body_s))
+
+    doc.build(elements)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def generate_ppt_report(D, rev_p, cost_p, op_p, ebitda_p, cum_ebitda, margins, rec_rate, inv_won):
+    """PPT 보고서 생성"""
+    from pptx import Presentation
+    from pptx.util import Inches, Pt, Emu
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import PP_ALIGN
+    import io
+
+    억 = 100_000_000
+    prs = Presentation()
+    prs.slide_width = Inches(13.33)
+    prs.slide_height = Inches(7.5)
+
+    def add_slide(title_text):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
+        # 배경색
+        bg = slide.background
+        fill = bg.fill
+        fill.solid()
+        fill.fore_color.rgb = RGBColor(0x0f, 0x17, 0x2a)
+        # 타이틀
+        txBox = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.8))
+        tf = txBox.text_frame
+        p = tf.paragraphs[0]
+        p.text = title_text
+        p.font.size = Pt(28)
+        p.font.bold = True
+        p.font.color.rgb = RGBColor(0xf8, 0xfa, 0xfc)
+        return slide
+
+    def add_text(slide, text, left, top, width, height, size=14, color='94a3b8', bold=False):
+        txBox = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
+        tf = txBox.text_frame
+        tf.word_wrap = True
+        p = tf.paragraphs[0]
+        p.text = text
+        p.font.size = Pt(size)
+        p.font.bold = bold
+        r, g, b = int(color[:2],16), int(color[2:4],16), int(color[4:],16)
+        p.font.color.rgb = RGBColor(r, g, b)
+        return txBox
+
+    # Slide 1: 표지
+    s1 = add_slide('')
+    add_text(s1, '⛳ 등촌골프연습장', 0.8, 2.0, 11, 1.2, 44, 'f8fafc', True)
+    add_text(s1, '사업성 분석 보고서', 0.8, 3.0, 11, 0.8, 32, '93c5fd', True)
+    add_text(s1, f'88타석 실외  |  투자금 {inv_won/억:.0f}억원  |  2026.06 재오픈  |  5개년 재무모델링', 0.8, 4.2, 11, 0.6, 16, '94a3b8')
+    add_text(s1, '신진(SJ)  |  CONFIDENTIAL', 0.8, 5.5, 11, 0.5, 14, '64748b')
+
+    # Slide 2: 핵심 KPI
+    s2 = add_slide('핵심 투자 지표')
+    npv = sum(e/(1+0.1)**(i+1) for i,e in enumerate(ebitda_p)) - inv_won
+    kpis = [
+        ('투자금', f'{inv_won/억:.0f}억'),
+        ('NPV', f'{npv/억:.1f}억'),
+        ('누적EBITDA', f'{cum_ebitda[-1]/억:.1f}억'),
+        ('회수율', f'{rec_rate[-1]*100:.1f}%'),
+        ('IRR', f'~{rec_rate[-1]*100*0.17:.1f}%'),
+    ]
+    for i, (label, value) in enumerate(kpis):
+        x = 0.5 + i * 2.5
+        add_text(s2, label, x, 1.8, 2.2, 0.5, 14, '94a3b8')
+        add_text(s2, value, x, 2.3, 2.2, 0.8, 32, 'f8fafc', True)
+
+    # Slide 3: 5개년 손익
+    s3 = add_slide('5개년 손익 추정')
+    yp = D['yp']
+    headers = ['항목'] + yp
+    data_rows = [
+        ['매출'] + [f'{v/억:.1f}억' for v in rev_p],
+        ['비용'] + [f'{v/억:.1f}억' for v in cost_p],
+        ['영업이익'] + [f'{v/억:.1f}억' for v in op_p],
+        ['EBITDA'] + [f'{v/억:.1f}억' for v in ebitda_p],
+        ['영업이익률'] + [f'{m:.1f}%' for m in margins],
+        ['회수율'] + [f'{r*100:.1f}%' for r in rec_rate],
+    ]
+    y_start = 1.6
+    for row_idx, row in enumerate([headers] + data_rows):
+        for col_idx, cell in enumerate(row):
+            x = 0.5 + col_idx * 2.0
+            y = y_start + row_idx * 0.55
+            clr = '60a5fa' if row_idx == 0 else 'e2e8f0'
+            bold = row_idx == 0
+            add_text(s3, cell, x, y, 1.8, 0.4, 13, clr, bold)
+
+    # Slide 4: 투자 판단
+    s4 = add_slide('투자 판단')
+    if npv > 0:
+        verdict = '투자적합'
+        vcolor = '22c55e'
+    elif rec_rate[-1] > 0.6:
+        verdict = '조건부 검토'
+        vcolor = 'fbbf24'
+    else:
+        verdict = '신중검토 필요'
+        vcolor = 'ef4444'
+    add_text(s4, verdict, 0.8, 2.0, 11, 1.0, 48, vcolor, True)
+    add_text(s4, f'NPV {npv/억:.1f}억  |  회수율 {rec_rate[-1]*100:.1f}%  |  누적EBITDA {cum_ebitda[-1]/억:.1f}억', 0.8, 3.2, 11, 0.6, 18, 'cbd5e1')
+
+    buf = io.BytesIO()
+    prs.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 PAL = [C['blue'],C['red'],C['green'],C['orange'],C['purple'],C['cyan'],C['pink'],C['yellow']]
 PAL2 = ['#93c5fd','#fca5a5','#86efac','#fdba74','#c4b5fd','#67e8f9','#f9a8d4','#fde047']
 
@@ -1316,15 +1561,36 @@ div[data-testid="stRadio"] > label { display: none !important; }
 }
 </style>""", unsafe_allow_html=True)
 
-# 버튼 바 (오른쪽 정렬, 작게)
-bc = st.columns([7, 0.8, 0.6, 0.7])
+# 버튼 바 (오른쪽 정렬)
+bc = st.columns([4.5, 0.7, 0.7, 0.7, 0.6, 0.5, 0.7])
 with bc[1]:
     excel_data = generate_excel(D, rev_p, cost_p, op_p, ebitda_p, cum_ebitda, margins, rec_rate, inv_won)
-    st.download_button("엑셀 다운", data=excel_data,
+    st.download_button("엑셀", data=excel_data,
         file_name=f"등촌골프_{now_str}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True)
 with bc[2]:
+    # 용지 크기 선택 + PDF
+    _paper = st.selectbox("용지", ['A4', 'A3', 'B4', 'B3'], index=0, label_visibility="collapsed", key='paper_size')
+with bc[3]:
+    try:
+        pdf_data = generate_pdf_report(D, rev_p, cost_p, op_p, ebitda_p, cum_ebitda, margins, rec_rate, inv_won, _paper)
+        st.download_button(f"PDF({_paper})", data=pdf_data,
+            file_name=f"등촌골프_{now_str}_{_paper}.pdf",
+            mime="application/pdf",
+            use_container_width=True)
+    except Exception as e:
+        st.button(f"PDF", use_container_width=True, disabled=True, help=f"PDF 생성 실패: {e}")
+with bc[4]:
+    try:
+        ppt_data = generate_ppt_report(D, rev_p, cost_p, op_p, ebitda_p, cum_ebitda, margins, rec_rate, inv_won)
+        st.download_button("PPT", data=ppt_data,
+            file_name=f"등촌골프_{now_str}.pptx",
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            use_container_width=True)
+    except Exception as e:
+        st.button("PPT", use_container_width=True, disabled=True, help=f"PPT 생성 실패: {e}")
+with bc[5]:
     if st.button("초기화", use_container_width=True, help="모든 설정을 기본값으로"):
         import os as _os
         _save_path = _os.path.join(_os.path.dirname(__file__), 'user_settings.json')
@@ -1333,12 +1599,12 @@ with bc[2]:
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()
-with bc[3]:
-    csv_data = generate_csv_summary(D, rev_p, cost_p, op_p, ebitda_p, margins, rec_rate)
-    st.download_button("CSV", data=csv_data,
-        file_name=f"등촌골프_{now_str}.csv",
-        mime="text/csv",
-        use_container_width=True)
+with bc[6]:
+    # 프린트 기능 (브라우저 인쇄)
+    st.markdown(f"""<button onclick="window.print()" style="
+        width:100%;padding:6px 0;border-radius:8px;border:1px solid #334155;
+        background:#1e293b;color:#94a3b8;font-size:12px;cursor:pointer;
+        font-family:inherit;">프린트</button>""", unsafe_allow_html=True)
 
 # 탭 네비게이션
 selected_tab = st.radio("nav", TAB_NAMES, horizontal=True, label_visibility="collapsed", key="main_nav")
