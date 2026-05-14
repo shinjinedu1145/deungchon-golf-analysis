@@ -1512,6 +1512,101 @@ for i, e in enumerate(ebitda_p):
     if cum_temp >= inv_won and prev < inv_won:
         payback = i + ((inv_won - prev) / e if e else 0); break
 
+# ══════════════════════════════════════════════════════════════
+# 10개년 확장 (2031~2035) — 대시보드 v2 전용
+# 가정:
+#   회원수: 2030년 회원수 기준, 매년 -3% 감소 (시장 자연 축소)
+#   가격:   2031=2030 동결, 2032=+5%, 2033~2034=2032 동결, 2035=+5% 추가 (누적 +10.25%)
+#   비용:   2026~2030과 동일 인상률 복리
+#   감가:   5년 내용연수 만료 → 2031~2035 = 0
+# ══════════════════════════════════════════════════════════════
+yp_10 = list(D['yp']) + ['2031F', '2032F', '2033F', '2034F', '2035F']
+rev_p_10 = list(rev_p)
+cost_p_10 = list(cost_p)
+dep_10 = list(dep)
+
+# 2030년 회원수 (Excel Base 회복률 0.82)
+_M2030 = {
+    '1m': int(_M2018['1m'] * _RECOVERY[2030]),
+    '3m': int(_M2018['3m'] * _RECOVERY[2030]),
+    'coupon': int(_M2018['coupon'] * _RECOVERY[2030]),
+    'daily': int(_M2018['daily'] * _RECOVERY[2030]),
+}
+_m6_2030 = int(m_6m * 12/9)  # 6개월권 (사이드바×12/9)
+
+for n in range(5):  # 2031~2035
+    yr_val = 2031 + n
+    # 회원수: 2030 × 0.97^(n+1)
+    cust_factor = 0.97 ** (n + 1)
+    # 가격: 2031=1.0, 2032~2034=1.05, 2035=1.05^2
+    if yr_val == 2031:
+        price_factor = 1.0
+    elif yr_val == 2035:
+        price_factor = 1.05 * 1.05
+    else:
+        price_factor = 1.05
+
+    m1_n = int(_M2030['1m'] * cust_factor)
+    m3_n = int(_M2030['3m'] * cust_factor)
+    mc_n = int(_M2030['coupon'] * cust_factor)
+    md_n = int(_M2030['daily'] * cust_factor)
+    m6_n = int(_m6_2030 * cust_factor)
+
+    # 골프매출 (제니스 가격 × price_factor)
+    golf = (m1_n * _jenis_p_1m * price_factor
+            + m3_n * _jenis_p_3m * price_factor
+            + m6_n * _jenis_p_6m * price_factor
+            + mc_n * _jenis_p_coupon * price_factor
+            + md_n * _jenis_p_daily * price_factor
+            + p_lesson  # 프로레슨 동결
+            + m_locker * _jenis_p_locker * 12 * price_factor)
+    rev_yr_n = golf * _adj_normal + _rent_annual
+    rev_p_10.append(rev_yr_n)
+
+    # 비용 (인상률 복리, y는 누적 햇수 = n+5)
+    y = n + 5  # 2031: y=5, ..., 2035: y=9
+    yr_labor_n = monthly_labor * 만 * 12 * (1 + s_labor_up) ** y
+    yr_elec_n = _op_elec_m * 12 * (1 + s_elec_up) ** y
+    yr_water_n = _op_water_m * 12 * (1 + s_util_up) ** y
+    yr_tax_n = _op_tax_m * 12 * (1 + s_tax_up) ** y
+    yr_insur_n = _op_insur_m * 12 * (1 + s_util_up) ** y
+    yr_supply_n = _op_supply_m * 12 * (1 + s_supply_up) ** y
+    yr_maint_n = _op_maint_m * 12 * (1 + s_util_up) ** y
+    yr_card_n = rev_yr_n * op_card_fee
+    yr_outsource_n = _op_outsource_m * 12 * (1 + s_outsource_up) ** y
+    yr_etc_n = _op_etc_m * 12 * (1 + s_util_up) ** y
+    yr_mkt_n = _op_mkt_m * 12 * (1 + s_mkt_up) ** y
+    # 감가상각: 내용연수 5년 만료 → 0
+    yr_dep_n = 0
+    dep_10.append(yr_dep_n)
+    cost_yr_n = (yr_labor_n + yr_elec_n + yr_water_n + yr_tax_n + yr_insur_n
+                 + yr_supply_n + yr_maint_n + yr_card_n + yr_outsource_n
+                 + yr_etc_n + yr_mkt_n + yr_dep_n)
+    cost_p_10.append(cost_yr_n)
+
+# 파생 지표 10년
+op_p_10 = [r - c for r, c in zip(rev_p_10, cost_p_10)]
+ebitda_p_10 = [o + d for o, d in zip(op_p_10, dep_10)]
+cum_ebitda_10 = []
+_cc10 = 0
+for e in ebitda_p_10:
+    _cc10 += e; cum_ebitda_10.append(_cc10)
+rec_rate_10 = [c / inv_won if inv_won else 0 for c in cum_ebitda_10]
+fcf_p_10 = [e - max(o * s_tax_rate, 0) for e, o in zip(ebitda_p_10, op_p_10)]
+npv_val_10 = sum(f / (1 + disc_r) ** (i + 1) for i, f in enumerate(fcf_p_10)) - inv_won
+try:
+    irr_val_10 = float(np_irr([-inv_won] + fcf_p_10)) if np_irr else (sum(fcf_p_10) / 10) / inv_won if inv_won else 0
+except Exception:
+    irr_val_10 = (sum(fcf_p_10) / 10) / inv_won if inv_won else 0
+payback_10 = None
+_cum_temp_10 = 0
+for i, e in enumerate(ebitda_p_10):
+    _prev = _cum_temp_10; _cum_temp_10 += e
+    if _cum_temp_10 >= inv_won and _prev < inv_won:
+        payback_10 = i + ((inv_won - _prev) / e if e else 0); break
+margins_10 = [o / r * 100 if r else 0 for o, r in zip(op_p_10, rev_p_10)]
+em_10 = [e / r * 100 if r else 0 for e, r in zip(ebitda_p_10, rev_p_10)]
+
 # w_churn은 라인 1027에서 이미 정의됨
 
 # ══ BEP — 컨트롤 패널 기반 재계산 ══
@@ -1608,7 +1703,7 @@ with st.sidebar:
 # Navigation via radio buttons (wrap-friendly, no scroll)
 # ══════════════════════════════════════════════════════════════
 TAB_NAMES = ["대시보드", "시나리오", "기여도", "운영전략", "매출추정", "비용추정", "추정손익계산서",
-    "투자IRR", "현금흐름", "임대", "상권분석", "시장경제", "검증"]
+    "투자IRR", "현금흐름", "임대", "상권분석", "시장경제", "검증", "대시보드 v2(10년)"]
 
 # ── 통합 네비게이션 바 (탭 + 버튼) ──
 now_str = datetime.now().strftime('%Y%m%d_%H%M')
@@ -1626,10 +1721,10 @@ div[data-testid="stRadio"] {
     border-bottom: none !important;
 }
 
-/* 6열 그리드 */
+/* 7열 그리드 */
 div[data-testid="stRadio"] > div {
     display: grid !important;
-    grid-template-columns: repeat(6, 1fr) !important;
+    grid-template-columns: repeat(7, 1fr) !important;
     gap: 4px !important;
     padding: 0 !important;
 }
@@ -1748,7 +1843,7 @@ if False:
 
 # 탭 네비게이션 — 6개 탭만 노출 (대시보드/운영전략/매출/비용/손익BEP/상권경쟁)
 # 내부 _ti 인덱스는 전체 TAB_NAMES 기준으로 유지하여 각 탭 코드블록 그대로 사용
-VISIBLE_TABS = ["대시보드", "운영전략", "매출추정", "비용추정", "추정손익계산서", "상권분석"]
+VISIBLE_TABS = ["대시보드", "대시보드 v2(10년)", "운영전략", "매출추정", "비용추정", "추정손익계산서", "상권분석"]
 # 이전 라벨 → 새 라벨 마이그레이션 (저장된 main_nav 호환)
 _label_migration = {"매출": "매출추정", "비용": "비용추정", "손익BEP": "추정손익계산서", "상권경쟁": "상권분석", "현금흐름": "대시보드"}
 _visible_default = st.session_state.get('main_nav', VISIBLE_TABS[0])
@@ -1762,7 +1857,7 @@ selected_tab = st.radio("nav", VISIBLE_TABS, horizontal=True, label_visibility="
 _ti = TAB_NAMES.index(selected_tab)
 
 # 탭 하단 캡션 바 (활성 탭과 시각적으로 연결)
-st.markdown('<div class="tab-caption-bar">* 모든 금액은 VAT 제외 · 자가소유 부지 기준 · 2026.06 재오픈 · 5개년 재무모델</div>', unsafe_allow_html=True)
+st.markdown('<div class="tab-caption-bar">* 자가소유 부지 기준 · 2026.06 재오픈 · 10개년 재무모델</div>', unsafe_allow_html=True)
 
 # ── Chart Design Note ──
 # All charts use 2D (go.Bar, go.Scatter, go.Pie, go.Heatmap, etc.) rather than 3D
@@ -1874,6 +1969,20 @@ if _ti == 0:
         st.warning("**조건부 검토** — NPV 음수이나 5년 내 70%+ 회수 가능")
     else:
         st.error("**신중검토 필요** — NPV 음수, 투자회수율 미흡")
+
+    # ── 출구전략 시나리오: 2030년말 매각 ──
+    _exit_val_5 = 3000 * 억  # 3000억
+    _df_5 = 1 / (1 + disc_r) ** 5
+    _pv_exit_5 = _exit_val_5 * _df_5
+    _npv_exit_5 = npv_val + _pv_exit_5
+    st.markdown(f"""
+<div style="background:#0f172a; border:1px solid #1e293b; border-radius:10px; padding:14px 18px; margin:14px 0 0 0; border-left:4px solid #fbbf24;">
+<div style="color:#fbbf24; font-size:14px; font-weight:700; margin-bottom:6px;">🏆 출구전략 시나리오 — 2030년말 매각 (3,000억)</div>
+<div style="color:#cbd5e1; font-size:13px; line-height:1.7;">
+영업 5년 후 사업 매각 가정. 매각가 <b>3,000억</b> × 5년 할인계수({_df_5:.4f}, WACC {disc_r*100:.0f}%) = 현재가치 <b style="color:#86efac;">{_pv_exit_5/억:,.1f}억</b><br>
+<b>매각 반영 NPV</b>: 기본 NPV {npv_val/억:.2f}억 + 매각 PV {_pv_exit_5/억:,.1f}억 = <b style="color:#fbbf24; font-size:16px;">{_npv_exit_5/억:,.1f}억</b>
+</div>
+</div>""", unsafe_allow_html=True)
 
     st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
     sec("📊", "주요 대시보드")
@@ -3932,9 +4041,30 @@ if _ti == 4:
     c1, c2 = st.columns(2)
     with c1:
         info("사이드바에서 입력한 회원수×단가 기준의 **커스텀 시뮬레이션 매출** 구성 비율입니다 (특정 연도가 아닌 사용자 입력값 기반). 특정 상품이 30% 이상 차지하면 해당 상품 의존도가 높아 리스크 요인이 됩니다.")
-        items = [s for s in sim_data if s['상품'] != '합계']
-        fig = go.Figure(go.Pie(labels=[s['상품'] for s in items], values=[custom_rev_items[s['상품']] for s in items], hole=0.45, marker=dict(colors=PAL, line=dict(color='white', width=2)), textinfo='label+percent'))
-        lo(fig, title='매출 구성 비율 (사이드바 입력 기준)', height=420)
+        # 라벨 단축 + 크기순 정렬 + 작은 조각은 라벨 숨김 (범례로 표시)
+        items_sorted = sorted([s for s in sim_data if s['상품'] != '합계'],
+                              key=lambda x: custom_rev_items[x['상품']], reverse=True)
+        _label_short = {'임대(11~2월,4개월)': '임대매장', '골프레슨(프로임대)': '프로레슨'}
+        labels_pie = [_label_short.get(s['상품'], s['상품']) for s in items_sorted]
+        values_pie = [custom_rev_items[s['상품']] for s in items_sorted]
+        _tot_pie = sum(values_pie) or 1
+        # 5% 이상만 차트에 라벨 표시, 나머지는 범례에서만
+        text_inside = [f'{lbl}<br>{v/_tot_pie*100:.1f}%' if v/_tot_pie >= 0.05 else ''
+                       for lbl, v in zip(labels_pie, values_pie)]
+        fig = go.Figure(go.Pie(
+            labels=labels_pie, values=values_pie, hole=0.5,
+            marker=dict(colors=PAL, line=dict(color='#0f172a', width=2)),
+            text=text_inside, textinfo='text', textposition='inside',
+            insidetextorientation='horizontal',
+            textfont=dict(size=12, color='white'),
+            hovertemplate='%{label}<br>%{value:,.0f}원<br>(%{percent})<extra></extra>',
+            sort=False,
+        ))
+        lo(fig, title='매출 구성 비율 (사이드바 입력 기준)',
+           height=460,
+           margin=dict(t=50, b=20, l=20, r=20),
+           showlegend=True,
+           legend=dict(orientation='h', y=-0.08, font=dict(size=11), x=0.5, xanchor='center'))
         st.plotly_chart(fig)
     with c2:
         info("**2026F~2030F 5개년** 매출 항목별 누적 차트입니다(패드 연동: 2026 상품별 비중 유지하며 rev_p로 스케일). 각 색상이 상품을 나타내며, 전체 높이가 해당 연도 총 매출입니다.")
@@ -5203,7 +5333,358 @@ if _ti == 12:
     }
     dark_table(pd.DataFrame(sim_data))
 
-st.markdown(f'<div class="footer">⛳ 신진(SJ) 등촌골프연습장 사업성 분석 v5.0 &nbsp;|&nbsp; {s_bays}타석 실외 &nbsp;|&nbsp; ₩{s_inv}억 투자 &nbsp;|&nbsp; 2026.06 오픈 &nbsp;|&nbsp; 13개 분석 모듈</div>', unsafe_allow_html=True)
+# ═══ TAB 13: 대시보드 v2(10년) ═══
+if _ti == 13:
+    st.markdown(f"""<div style="padding:4px 0 18px 0; margin-bottom:14px; border-bottom:1px solid #1e293b;">
+        <h1 style="color:#f1f5f9; font-size:1.35rem; font-weight:700; margin:0; letter-spacing:-0.01em;">등촌골프연습장 사업성 분석 — 10개년 (2026~2035)</h1>
+        <p style="color:#64748b; font-size:0.82rem; margin:6px 0 0 0;">{s_bays}타석 · 투자금 {s_inv}억 · 2026.06 재오픈 · 영업 10년 · 2031~ 회원수 -3%/년 · 2032·2035 요금 +5%씩 인상</p>
+    </div>""", unsafe_allow_html=True)
+
+    # ── KPI 카드 (10년 기준) ──
+    def kpi_card_v2(col, label, value, tip_rows):
+        tip_html = ''.join(f'<tr><td style="color:#94a3b8;padding:3px 10px 3px 0;font-size:11px;white-space:nowrap;">{r[0]}</td><td style="color:#e2e8f0;padding:3px 0;font-size:11px;font-weight:600;">{r[1]}</td></tr>' for r in tip_rows)
+        col.markdown(f"""
+<div class="kpi-wrap">
+<div class="kpi-box">
+<div style="color:#94a3b8;font-size:11px;font-weight:600;letter-spacing:0.03em;">{label}</div>
+<div style="color:#f8fafc;font-size:22px;font-weight:800;margin-top:2px;">{value}</div>
+</div>
+<div class="kpi-tip"><table style="border-collapse:collapse;">{tip_html}</table></div>
+</div>""", unsafe_allow_html=True)
+
+    k = st.columns(7)
+    kpi_card_v2(k[0], "투자금", f"{s_inv}억", [
+        ("총 투자금","최초 한 번"),
+        ("타석당", f"{s_inv*억/s_bays/만:,.0f}만"),
+        ("내용연수", f"{s_useful}년 → 2031~ 감가 0"),
+    ])
+    kpi_card_v2(k[1], "10년 NPV", fmt억(npv_val_10), [
+        ("정의","10년 세후FCF 현재가치 - 투자"),
+        ("할인율(WACC)", f"{disc_r*100:.0f}%"),
+        ("5년 NPV", fmt억(npv_val)),
+        ("10년 NPV", fmt억(npv_val_10)),
+        ("판정","✅ 투자가치" if npv_val_10>0 else "⚠️ NPV 음수"),
+    ])
+    kpi_card_v2(k[2], "10년 누적EBITDA", fmt억(cum_ebitda_10[-1]), [
+        ("정의","10년간 EBITDA 누적"),
+        ("5년 누적", fmt억(cum_ebitda[-1])),
+        ("10년 누적", fmt억(cum_ebitda_10[-1])),
+        ("증분 (6~10년)", fmt억(cum_ebitda_10[-1]-cum_ebitda[-1])),
+        ("투자금 대비",f"{cum_ebitda_10[-1]/inv_won*100:.1f}%"),
+    ])
+    kpi_card_v2(k[3], "10년 회수율", f"{rec_rate_10[-1]*100:.1f}%", [
+        ("정의","누적EBITDA ÷ 투자금"),
+        ("5년차", f"{rec_rate[-1]*100:.1f}%"),
+        ("10년차", f"{rec_rate_10[-1]*100:.1f}%"),
+        ("미회수", fmt억(inv_won-cum_ebitda_10[-1]) if cum_ebitda_10[-1] < inv_won else "전액 회수"),
+    ])
+    kpi_card_v2(k[4], "10년 IRR", f"{irr_val_10*100:.1f}%", [
+        ("정의","10년 NPV=0 할인율"),
+        ("5년 IRR", f"{irr_val*100:.1f}%"),
+        ("10년 IRR", f"{irr_val_10*100:.1f}%"),
+        ("WACC", f"{disc_r*100:.0f}%"),
+        ("판정","✅ 우수" if irr_val_10 > disc_r else "⚠️ 미달"),
+    ])
+    kpi_card_v2(k[5], "Payback", f"{payback_10:.1f}년" if payback_10 else "10년+", [
+        ("정의","투자금 회수 시점"),
+        ("5년차 누적", fmt억(cum_ebitda[-1])),
+        ("10년차 누적", fmt억(cum_ebitda_10[-1])),
+        ("판정", f"✅ {payback_10:.1f}년" if payback_10 else "⚠️ 10년 내 미회수"),
+    ])
+    kpi_card_v2(k[6], "10년 매출", fmt억(sum(rev_p_10)), [
+        ("정의","10년 누적 매출"),
+        ("5년 누적", fmt억(sum(rev_p))),
+        ("6~10년 누적", fmt억(sum(rev_p_10[5:]))),
+        ("연평균", fmt억(sum(rev_p_10)/10)),
+    ])
+
+    st.markdown("<div style='margin:20px 0;'></div>", unsafe_allow_html=True)
+    if npv_val_10 > 0:
+        st.success(f"**투자적합** — 10년 NPV +{npv_val_10/억:.1f}억, 회수율 {rec_rate_10[-1]*100:.1f}%")
+    elif rec_rate_10[-1] > 0.7:
+        st.warning(f"**조건부 검토** — 10년 NPV {npv_val_10/억:.1f}억이나 회수율 {rec_rate_10[-1]*100:.1f}%")
+    else:
+        st.error(f"**신중검토** — 10년 NPV {npv_val_10/억:.1f}억, 회수율 {rec_rate_10[-1]*100:.1f}% 미흡")
+
+    # ── 출구전략 시나리오: 2035년말 매각 ──
+    _exit_val_10 = 3500 * 억  # 3500억
+    _df_10 = 1 / (1 + disc_r) ** 10
+    _pv_exit_10 = _exit_val_10 * _df_10
+    _npv_exit_10 = npv_val_10 + _pv_exit_10
+    st.markdown(f"""
+<div style="background:#0f172a; border:1px solid #1e293b; border-radius:10px; padding:14px 18px; margin:14px 0 0 0; border-left:4px solid #fbbf24;">
+<div style="color:#fbbf24; font-size:14px; font-weight:700; margin-bottom:6px;">🏆 출구전략 시나리오 — 2035년말 매각 (3,500억)</div>
+<div style="color:#cbd5e1; font-size:13px; line-height:1.7;">
+영업 10년 후 사업 매각 가정. 매각가 <b>3,500억</b> × 10년 할인계수({_df_10:.4f}, WACC {disc_r*100:.0f}%) = 현재가치 <b style="color:#86efac;">{_pv_exit_10/억:,.1f}억</b><br>
+<b>매각 반영 NPV</b>: 기본 10년 NPV {npv_val_10/억:.2f}억 + 매각 PV {_pv_exit_10/억:,.1f}억 = <b style="color:#fbbf24; font-size:16px;">{_npv_exit_10/억:,.1f}억</b>
+</div>
+</div>""", unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
+    sec("📊", "10개년 손익 추이")
+
+    # ── 매출/비용/영업이익 + EBITDA/누적 차트 ──
+    c1, c2 = st.columns(2)
+    with c1:
+        info("10년 매출(파랑)·비용(빨강)·영업이익(초록선) 추이. 2032·2035 요금 인상 효과 + 2031~ 회원 감소 반영.")
+        fig = go.Figure()
+        fig.add_trace(go.Bar(name='매출', x=yp_10, y=[v/억 for v in rev_p_10], marker_color=C['blue'],
+            text=[f"{v/억:.1f}" for v in rev_p_10], textposition='inside', textfont=dict(size=11, color='white')))
+        fig.add_trace(go.Bar(name='비용', x=yp_10, y=[v/억 for v in cost_p_10], marker_color=C['red'],
+            text=[f"{v/억:.1f}" for v in cost_p_10], textposition='inside', textfont=dict(size=11, color='white')))
+        fig.add_trace(go.Scatter(name='영업이익', x=yp_10, y=[v/억 for v in op_p_10],
+            mode='lines+markers', line=dict(color=C['green'], width=3), marker=dict(size=8, symbol='diamond')))
+        fig.add_hline(y=0, line_dash="dash", line_color="#475569")
+        lo(fig, title='10년 매출 vs 비용 (억원) — 초록선: 영업이익', barmode='group', height=380, yaxis_title='억원',
+           margin=dict(t=45, b=30, l=15, r=15))
+        st.plotly_chart(fig, use_container_width=True, key="v2_pc_1")
+    with c2:
+        info("EBITDA(초록=흑자/빨강=적자) + 누적 EBITDA 곡선. 빨간 점선이 투자금 회수선.")
+        fig2 = go.Figure()
+        fig2.add_trace(go.Bar(name='EBITDA', x=yp_10, y=[e/억 for e in ebitda_p_10],
+            marker_color=[C['red'] if e<0 else '#22c55e' for e in ebitda_p_10],
+            text=[f"{e/억:.1f}" for e in ebitda_p_10], textposition='inside', textfont=dict(size=11, color='white')))
+        fig2.add_trace(go.Scatter(name='누적 EBITDA', x=yp_10, y=[c/억 for c in cum_ebitda_10],
+            mode='lines+markers', line=dict(color=C['orange'], width=3), marker=dict(size=8)))
+        fig2.add_hline(y=inv_won/억, line_dash="dash", line_color=C['red'], line_width=2,
+            annotation_text=f"투자금 {inv_won/억:.0f}억", annotation_font_size=11, annotation_font_color=C['red'])
+        lo(fig2, title='10년 EBITDA 및 투자회수 (억원)', height=380, yaxis_title='억원',
+           margin=dict(t=45, b=30, l=15, r=15))
+        st.plotly_chart(fig2, use_container_width=True, key="v2_pc_2")
+
+    # ── 회원수·가격 가정 ──
+    sec("📐", "10개년 핵심 가정 & 매출 변동 해석")
+
+    # 가정 요약 박스
+    st.markdown("""
+<div style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:16px;margin:12px 0;">
+<div style="color:#60a5fa;font-size:14px;font-weight:700;margin-bottom:10px;">📌 핵심 가정 3가지</div>
+<div style="color:#cbd5e1;font-size:13px;line-height:1.8;">
+<b style="color:#86efac;">① 회원수 회복 곡선</b>: 2027(80%) → 2028~2030(80~82% Excel Base) → <b style="color:#fbbf24;">2031부터 매년 -3% 감소</b> (골프 인구 자연 축소 가정)<br>
+<b style="color:#86efac;">② 요금 인상 스케줄</b>: 2027(사이드바 가격) → 2028~2031(제니스 동일가) → <b style="color:#fbbf24;">2032 +5% 인상</b> → 2033~2034(동결) → <b style="color:#fbbf24;">2035 +5% 추가 인상</b> (누적 +10.25%)<br>
+<b style="color:#86efac;">③ 비용 인상</b>: 인건비·전력·세금 등 항목별 인상률 복리 적용. <b style="color:#fbbf24;">2031부터 감가상각 = 0</b> (내용연수 5년 만료)
+</div>
+</div>
+""", unsafe_allow_html=True)
+
+    # 연도별 회원수·가격·매출 변동 분해표
+    subsec("연도별 회원수 · 요금 가정")
+    info("회원수 회복률은 2018년 등촌 실적 대비 비율. 가격은 제니스(2028~) 대비 인상폭.")
+    assump_data = {
+        '연도': ['2026', '2027', '2028', '2029', '2030', '2031', '2032', '2033', '2034', '2035'],
+        '회원수 회복률 (2018 대비)': [
+            '60% × 9/12',
+            '80%', '80%', '82%', '82%',
+        ],
+        '회원수 YoY': ['-', '+33%', '+0%', '+2.5%p', '0%'],
+        '요금 기준': ['사이드바', '사이드바', '제니스', '제니스', '제니스'],
+        '비고': ['9개월 운영', '12개월 정상', '+제니스가 점프업', '동결', '동결'],
+    }
+    # 2031~2035 확장
+    for n in range(5):
+        yr_val = 2031 + n
+        cust_factor = 0.97 ** (n + 1)
+        recovery_eq = _RECOVERY[2030] * cust_factor
+        assump_data['회원수 회복률 (2018 대비)'].append(f"{recovery_eq*100:.1f}%")
+        assump_data['회원수 YoY'].append('-3%')
+        if yr_val == 2032:
+            assump_data['요금 기준'].append('제니스 ×1.05')
+            assump_data['비고'].append('🔼 +5% 인상')
+        elif yr_val == 2035:
+            assump_data['요금 기준'].append('제니스 ×1.1025')
+            assump_data['비고'].append('🔼 +5% 추가 인상')
+        else:
+            prev_factor = '×1.05' if yr_val > 2032 else ''
+            assump_data['요금 기준'].append(f'제니스 {prev_factor}'.strip())
+            assump_data['비고'].append('동결')
+    dark_table(pd.DataFrame(assump_data))
+
+    # ── 매출 변동 요인 분해 (YoY 해석) ──
+    subsec("연도별 매출 변동 사유")
+    info("전년 대비 매출 증감을 회원수 효과·가격 효과·기타로 분해 (근사치). 큰 변화의 이유를 한눈에 파악할 수 있습니다.")
+    yoy_data = {'연도': [], '전년 매출': [], '당해 매출': [], 'YoY 증감': [], '주요 사유': []}
+    _reasons = {
+        2027: '회원수 60%→80% 회복 (+33%) + 9개월→12개월 정상가동',
+        2028: '제니스 가격 점프업 (~+4%)',
+        2029: '회복률 80%→82% (+2.5%p)',
+        2030: '동결 (회복 82% 유지, 제니스가 유지)',
+        2031: '회원수 -3% 감소 시작 (가격 동결)',
+        2032: '회원 -3% 감소 vs 가격 +5% 인상 → 가격 효과 우세',
+        2033: '회원 -3% 감소 (가격 동결) → 매출 감소',
+        2034: '회원 -3% 감소 (가격 동결) → 매출 감소',
+        2035: '회원 -3% 감소 vs 가격 +5% 추가 인상 → 가격 효과 우세',
+    }
+    for i in range(1, 10):
+        yr_label = yp_10[i].replace('F','')
+        yr_int = 2026 + i
+        rev_c = rev_p_10[i]
+        rev_p_prev = rev_p_10[i-1]
+        delta = rev_c - rev_p_prev
+        delta_pct = (rev_c / rev_p_prev - 1) * 100 if rev_p_prev else 0
+        yoy_data['연도'].append(yr_label)
+        yoy_data['전년 매출'].append(fmt억(rev_p_prev))
+        yoy_data['당해 매출'].append(fmt억(rev_c))
+        yoy_data['YoY 증감'].append(f"{delta/억:+.2f}억 ({delta_pct:+.1f}%)")
+        yoy_data['주요 사유'].append(_reasons.get(yr_int, '-'))
+    dark_table(pd.DataFrame(yoy_data))
+
+    # ── 영업이익·EBITDA 변동 해석 ──
+    subsec("영업이익·EBITDA 변동 해석")
+    info("매출은 일정 수준 유지되어도 비용은 매년 복리 인상되므로 영업이익은 점진 감소. 2031부터 감가상각 0으로 영업이익 = EBITDA.")
+    op_data = {'연도': [], '매출': [], '비용 인상폭': [], '영업이익': [], '감가상각': [], 'EBITDA': [], '해석': []}
+    _op_reasons = {
+        2026: '오픈 첫해 9개월 + 시즌평균 0.756 → 적자',
+        2027: '정상가동, 흑자전환',
+        2028: '제니스가 인상 → 영업이익 ↑',
+        2029: '회원 +2.5%p 회복 → 영업이익 정점',
+        2030: '매출 동결 + 비용 인상 → 영업이익 미세 감소',
+        2031: '회원 -3% + 감가 0 → 영업이익=EBITDA 동일',
+        2032: '가격 +5% 인상으로 일부 상쇄',
+        2033: '비용 인상 누적 → 영업이익 감소 가속',
+        2034: '비용 인상 누적 → 영업이익 감소 지속',
+        2035: '가격 +5% 추가 인상으로 일부 방어',
+    }
+    for i in range(10):
+        yr_label = yp_10[i].replace('F','')
+        yr_int = 2026 + i
+        rev_c = rev_p_10[i]
+        cost_c = cost_p_10[i]
+        op_c = op_p_10[i]
+        dep_c = dep_10[i]
+        ebitda_c = ebitda_p_10[i]
+        cost_yoy = ''
+        if i > 0:
+            cost_yoy_pct = (cost_c / cost_p_10[i-1] - 1) * 100
+            cost_yoy = f'{fmt억(cost_c)} ({cost_yoy_pct:+.1f}%)'
+        else:
+            cost_yoy = fmt억(cost_c)
+        op_data['연도'].append(yr_label)
+        op_data['매출'].append(fmt억(rev_c))
+        op_data['비용 인상폭'].append(cost_yoy)
+        op_data['영업이익'].append(fmt억(op_c))
+        op_data['감가상각'].append(fmt억(dep_c))
+        op_data['EBITDA'].append(fmt억(ebitda_c))
+        op_data['해석'].append(_op_reasons.get(yr_int, '-'))
+    dark_table(pd.DataFrame(op_data))
+
+    # ── 핵심 인사이트 ──
+    st.markdown("""
+<div style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:16px;margin:16px 0 8px 0;border-left:4px solid #f97316;">
+<div style="color:#fdba74;font-size:14px;font-weight:700;margin-bottom:10px;">💡 핵심 인사이트</div>
+<div style="color:#cbd5e1;font-size:13px;line-height:1.8;">
+<b>1) 2031부터 EBITDA = 영업이익</b>: 5년 내용연수 만료로 감가상각 0. 손익 구조가 단순화되며 회계상 이익과 현금 흐름 일치.<br>
+<b>2) 가격 인상의 한계 효과</b>: 2032년 +5% 인상으로 회원 -3% 감소를 상쇄하지만, 비용 인상이 누적되어 영업이익은 점진 감소. 가격 인상은 일회성 부양 효과.<br>
+<b>3) 회원 감소 vs 비용 인상의 이중 압박</b>: 2033~2034년은 가격 동결 구간으로 회원 감소(-3%)와 비용 인상(연 ~3%)이 동시에 작용해 영업이익 가속 감소.<br>
+<b>4) Payback 회수 시점</b>: 누적 EBITDA가 투자금에 도달하는 시점 (KPI Payback 카드 참조). 10년 누적 EBITDA가 투자금의 100% 이상이면 회수 완료.
+</div>
+</div>
+""", unsafe_allow_html=True)
+
+    # ── 10개년 손익계산서 ──
+    sec("📋", "10개년 손익계산서")
+    info("2026~2035 10개년 예측 손익계산서. 회수율은 누적 EBITDA / 투자금. 2031~ 감가상각비 = 0 (내용연수 5년 만료).")
+    pl_full_10 = {'항목': ['확정매출', '총비용', '  (감가상각비)', '영업이익', 'EBITDA', '영업이익률(%)', 'EBITDA이익률(%)', '회수율(%)']}
+    for i, yr in enumerate(yp_10):
+        r = rev_p_10[i]; c_ = cost_p_10[i]; d_ = dep_10[i]; o_ = op_p_10[i]; e_ = ebitda_p_10[i]
+        pl_full_10[yr] = [fmt억(r), fmt억(c_), f"  ({fmt억(d_)})", fmt억(o_), fmt억(e_),
+                          f"{o_/r*100:.1f}%" if r else "0%",
+                          f"{e_/r*100:.1f}%" if r else "0%",
+                          f"{rec_rate_10[i]*100:.1f}%"]
+    dark_table(pd.DataFrame(pl_full_10))
+
+    # ── CAPEX 계획 (중기 시설 갱신) ──
+    sec("📦", "중기 CAPEX 계획 (시설 갱신)")
+    info("실외 골프연습장의 핵심 구조물은 약 7~10년 주기로 교체·보수가 필요합니다. 철골 프레임 도장 보수 + 그물망 전면 교체 예산을 반영합니다.")
+
+    # CAPEX 내역 표
+    capex_items = {
+        '항목': ['철골 프레임 (보수·도장)', '그물망 전면 교체', 'CAPEX 합계'],
+        '내역': [
+            '88타석 외곽 철골 구조물 재도장 + 부식부 보수',
+            '타석 후면·측면·천장 그물망 교체 (UV·풍압 손상)',
+            '— '
+        ],
+        '예산': ['약 1.5억', '약 1.0억', '**약 2.5억**'],
+        '내용연수': ['5~7년', '5~7년', '평균 6년'],
+    }
+    dark_table(pd.DataFrame(capex_items))
+
+    # CAPEX 발생 연도 선택
+    _capex_amount = 250_000_000  # 2.5억
+    cx_col1, cx_col2 = st.columns([1, 2])
+    with cx_col1:
+        capex_year_label = st.selectbox(
+            "CAPEX 발생 연도",
+            ['미반영', '2031F', '2032F', '2033F', '2034F', '2035F'],
+            index=3,  # default 2033 (8년차)
+            key='capex_year_v2',
+            help="실외 시설 노후 주기 7~10년 → 8년차(2033) 권장",
+        )
+    with cx_col2:
+        st.markdown(f"""
+<div style="background:#1e293b;border-radius:8px;padding:12px;border-left:3px solid #fb7185;font-size:13px;color:#cbd5e1;">
+<b style="color:#fda4af;">반영 효과</b>: 선택 연도에 <b style="color:#fbbf24;">−2.5억</b> 현금 유출 (FCF 차감). 회계상 자산화 후 잔존 가치는 미반영(보수적). 누적 FCF·회수율·NPV에 영향.
+</div>""", unsafe_allow_html=True)
+
+    # CAPEX 적용 여부에 따른 FCF 인덱스
+    _capex_idx = None
+    if capex_year_label != '미반영':
+        _capex_idx = int(capex_year_label.replace('F','')) - 2026  # 2031→5
+
+    # ── 10개년 현금흐름표 (CAPEX 반영) ──
+    sec("💰", "10개년 현금흐름표 (CAPEX 반영)")
+    info("EBITDA − 법인세 = 영업CF. FCF = 영업CF − CAPEX. 누적 FCF가 양(+)이면 현금 축적 중.")
+    _cf_data_10 = {'항목': ['EBITDA(임대포함)', '법인세(-)', '영업CF', 'CAPEX(-)', 'FCF', '누적FCF']}
+    _cum_fcf_v2 = 0
+    _fcf_with_capex = []  # CAPEX 반영된 FCF 리스트 (NPV 재계산용)
+    for i, yr in enumerate(yp_10):
+        _tax_d = max(op_p_10[i] * s_tax_rate, 0)
+        _ocf_d = ebitda_p_10[i] - _tax_d
+        _capex_d = _capex_amount if i == _capex_idx else 0
+        _fcf_d = _ocf_d - _capex_d
+        _fcf_with_capex.append(_fcf_d)
+        _cum_fcf_v2 += _fcf_d
+        _cf_data_10[yr] = [
+            fmt억(ebitda_p_10[i]), fmt억(_tax_d), fmt억(_ocf_d),
+            fmt억(_capex_d) if _capex_d > 0 else '0.0억',
+            fmt억(_fcf_d), fmt억(_cum_fcf_v2)
+        ]
+    dark_table(pd.DataFrame(_cf_data_10))
+
+    # NPV 재계산 (CAPEX 반영)
+    _npv_with_capex = sum(f / (1 + disc_r) ** (i + 1) for i, f in enumerate(_fcf_with_capex)) - inv_won
+    _capex_msg = ''
+    if _capex_idx is not None:
+        _delta_npv = _npv_with_capex - npv_val_10
+        _capex_msg = f' · CAPEX 반영 NPV **{_npv_with_capex/억:.1f}억** ({_delta_npv/억:+.1f}억 영향)'
+    st.caption(f"※ 10년 누적 FCF: **{_cum_fcf_v2/억:.1f}억** · 투자금 {inv_won/억:.0f}억 대비 **{_cum_fcf_v2/inv_won*100:.1f}%** 회수{_capex_msg}")
+
+    # ── 5년 vs 10년 비교 ──
+    subsec("5년 vs 10년 비교")
+    comp_v2 = {
+        '지표': ['누적 매출', '누적 비용', '누적 영업이익', '누적 EBITDA', '누적 FCF', 'NPV', 'IRR', '회수율'],
+        '5년 (2026~2030)': [
+            fmt억(sum(rev_p)), fmt억(sum(cost_p)), fmt억(sum(op_p)),
+            fmt억(sum(ebitda_p)), fmt억(sum(fcf_p)),
+            fmt억(npv_val), f"{irr_val*100:.1f}%", f"{rec_rate[-1]*100:.1f}%",
+        ],
+        '10년 (2026~2035)': [
+            fmt억(sum(rev_p_10)), fmt억(sum(cost_p_10)), fmt억(sum(op_p_10)),
+            fmt억(sum(ebitda_p_10)), fmt억(sum(fcf_p_10)),
+            fmt억(npv_val_10), f"{irr_val_10*100:.1f}%", f"{rec_rate_10[-1]*100:.1f}%",
+        ],
+        '증분 (6~10년)': [
+            fmt억(sum(rev_p_10)-sum(rev_p)), fmt억(sum(cost_p_10)-sum(cost_p)),
+            fmt억(sum(op_p_10)-sum(op_p)), fmt억(sum(ebitda_p_10)-sum(ebitda_p)),
+            fmt억(sum(fcf_p_10)-sum(fcf_p)),
+            fmt억(npv_val_10-npv_val),
+            f"{(irr_val_10-irr_val)*100:+.1f}%p",
+            f"{(rec_rate_10[-1]-rec_rate[-1])*100:+.1f}%p",
+        ],
+    }
+    dark_table(pd.DataFrame(comp_v2))
+
+st.markdown(f'<div class="footer">⛳ 신진(SJ) 등촌골프연습장 사업성 분석 v5.0 &nbsp;|&nbsp; {s_bays}타석 실외 &nbsp;|&nbsp; ₩{s_inv}억 투자 &nbsp;|&nbsp; 2026.06 오픈 &nbsp;|&nbsp; 14개 분석 모듈</div>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════
 # Auto-Save: 모든 위젯 값을 JSON으로 자동 저장
