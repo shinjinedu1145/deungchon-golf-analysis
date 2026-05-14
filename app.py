@@ -1047,7 +1047,7 @@ with st.sidebar:
 ④ 6월 오픈 = 장마+폭염 → 체험 방문 자체가 적음
 </div>""", unsafe_allow_html=True)
 
-        st.caption("**월별 고객 유입률 (정상 대비 %)**")
+        st.caption("**월별 유입 가중치 — 2026 9개월 매출을 월별로 분배하는 비율**")
         ramp_months = ['6월(오픈)', '7월', '8월', '9월', '10월', '11월', '12월', '1월', '2월']
         ramp_defaults = [25, 35, 40, 55, 65, 70, 60, 55, 70]
         ramp_values = []
@@ -1055,16 +1055,16 @@ with st.sidebar:
         for i, (month, default) in enumerate(zip(ramp_months, ramp_defaults)):
             col = [rc1, rc2, rc3][i % 3]
             val = col.number_input(month, value=sv(f'ramp_{i}', default), min_value=5, max_value=100, step=5, key=f'ramp_{i}',
-                help=f"{month}: 정상 매출의 몇 %가 실현되는지")
+                help=f"{month}: 월별 분배 가중치 (시즌 가중치와 곱해서 9개월 매출 분배)")
             ramp_values.append(val / 100)
 
         ramp_avg = sum(ramp_values) / len(ramp_values)
         st.markdown("---")
-        st.caption("📊 램프업 요약")
+        st.caption("📊 램프업 가중치 요약")
         rc1, rc2 = st.columns(2)
-        rc1.metric("9개월 평균 유입률", f"{ramp_avg*100:.1f}%")
-        rc2.metric("정상 대비 매출 감소", f"-{(1-ramp_avg)*100:.1f}%")
-        st.caption(f"▸ 오픈 첫해는 정상 매출의 약 **{ramp_avg*100:.0f}%** 수준만 실현")
+        rc1.metric("9개월 평균 가중치", f"{ramp_avg*100:.1f}%")
+        rc2.metric("초·말월 격차", f"{(max(ramp_values)-min(ramp_values))*100:.0f}%p")
+        st.caption(f"▸ **월별 분배 곡선** 용도 (오픈초~안정화). 연 매출 총량에는 영향 없음 — 회원수가 이미 2018×60%×9/12로 보수적 가정.")
 
     # 💸 비용 가정 — 숨김 처리 (인건비/월 운영비/연간 비용 인상률 expander로 대체됨)
     if False:
@@ -1350,22 +1350,62 @@ _golf_rev_9m_raw = custom_total_rev - _rent_2026  # 골프 이론 매출 (회원
 # 환불비율만 매출에서 차감 (회원권 구매 후 환불/변경)
 _refund_adj = 1 - s_refund  # 환불비율 (예: 4% → ×0.96)
 
-# 회원수 = 9개월 총 누적 (2018×60%×9/12). 시즌/램프업은 월별 분배에만 사용
-# 연간 매출 보정: 이탈률(중도해지) + 환불(구매후취소) + 상권(입지) + 경제(외부환경)
+# 2026 연간 매출 보정: 이탈률(중도해지) + 환불(구매후취소) + 상권(입지) + 경제(외부환경) + 시즌평균
+# 시즌평균은 2026에만 적용 (오픈 첫해 9개월의 비수기 비중 반영). 2027+는 정상가동으로 미적용.
+# 램프업은 월별 분배 전용 (연 매출 영향 없음).
 _churn_adj = 1 - w_churn  # 가중평균 이탈률 차감 (비수기 해지 반영)
-_adj_2026 = _churn_adj * _refund_adj * ta_rev_adj * econ_rev_adj  # 이탈+환불+상권+경제
+_adj_2026 = _churn_adj * _refund_adj * ta_rev_adj * econ_rev_adj * _season_avg  # 이탈+환불+상권+경제+시즌평균(2026 only)
 _rev_2026 = _golf_rev_9m_raw * _adj_2026 + _rent_2026
 
-# ── 2027F~: 정상가동 (12개월), 동일 보정 ──
+# ── 2027F~: 연도별 회복률 × 2018 회원수, 2028.01부터 제니스가 인상 ──
+# 회원수: 2026=사이드바(2018×60%), 2027=80%(사용자 시장조사), 2028~2030=Excel ① 가정 시트 Base
+# 가격:  2026~2027=사이드바, 2028~2030=제니스 동일가
 _adj_normal = _churn_adj * _refund_adj * ta_rev_adj * econ_rev_adj
-_golf_rev_annual = _golf_rev_9m_raw * 12 / 9 * _adj_normal  # 12개월 환산
-_rev_full_yr = _golf_rev_annual + _rent_annual
 
-rev_p = [_rev_2026]
-# 2027F = 정상가동 기준, 2028F~ = 전년 대비 성장률 적용
-rev_p.append(_rev_full_yr)  # 2027F: 정상가동 첫해 (성장률 미적용)
-for i in range(1, 4):
-    rev_p.append(_rev_full_yr * (1 + s_growth) ** i)  # 2028F~2030F
+# 2018 실제 회원수 (Excel ⑧ 최적화 요금체계표 기준)
+_M2018 = {'1m': 578, '3m': 1533, 'coupon': 2479, 'daily': 52061}
+# 회복률: 2027은 사용자 시장조사 80%, 2028~2030은 Excel ① 가정 시트 Base 시나리오 적용
+_RECOVERY = {
+    2027: 0.80,
+    2028: A['market']['고객회복률_2028'][1],   # Excel Base = 80%
+    2029: A['market']['고객회복률_2029'][1],   # Excel Base = 82%
+    2030: A['market']['고객회복률_2030'][1],   # Excel Base = 82%
+}
+
+# 제니스 가격 가중평균 (2028.01~ 적용)
+_jenis_p_1m = (JENIS['1m_morning_m']+JENIS['1m_allday_m']+JENIS['1m_free_m']+JENIS['1m_morning_f']+JENIS['1m_allday_f']+JENIS['1m_free_f']) / 6
+_jenis_p_3m = (JENIS['3m_morning_m']+JENIS['3m_allday_m']+JENIS['3m_free_m']+JENIS['3m_morning_f']+JENIS['3m_allday_f']+JENIS['3m_free_f']) / 6
+_jenis_p_6m = (JENIS['6m_morning_m']+JENIS['6m_allday_m']+JENIS['6m_free_m']+JENIS['6m_morning_f']+JENIS['6m_allday_f']+JENIS['6m_free_f']) / 6
+_jenis_p_coupon = (JENIS['coupon_10'] + JENIS['coupon_20'] + JENIS['coupon_30']) / 3
+_jenis_p_daily = (JENIS['daily_wd_70'] + JENIS['daily_wd_90'] + JENIS['daily_we_70'] + JENIS['daily_we_90']) / 4
+_jenis_p_locker = JENIS['locker_monthly']
+
+def _yr_revenue(year):
+    """연도별 매출 산출. 회원수 = 2018 × 회복률, 가격은 2027까지 사이드바·2028~ 제니스."""
+    r = _RECOVERY[year]
+    m1 = int(_M2018['1m'] * r)
+    m3 = int(_M2018['3m'] * r)
+    mc = int(_M2018['coupon'] * r)
+    md = int(_M2018['daily'] * r)
+    m6 = int(m_6m * 12/9)  # 6개월권: 2018 미운영 → 사이드바×12/9 환산
+    if year <= 2027:
+        # 2027까지 사이드바 가격
+        golf = (m1*p_1m + m3*p_3m + m6*p_6m + mc*p_coupon + md*p_daily
+                + p_lesson + m_locker*p_locker*12)
+    else:
+        # 2028.01부터 제니스 동일가
+        golf = (m1*_jenis_p_1m + m3*_jenis_p_3m + m6*_jenis_p_6m
+                + mc*_jenis_p_coupon + md*_jenis_p_daily
+                + p_lesson + m_locker*_jenis_p_locker*12)
+    return golf * _adj_normal + _rent_annual
+
+rev_p = [
+    _rev_2026,             # 2026 (사이드바 회원=2018×60%, 9개월, 사이드바 가격)
+    _yr_revenue(2027),     # 2027 (2018×85%, 12개월, 사이드바 가격)
+    _yr_revenue(2028),     # 2028 (2018×90%, 12개월, 제니스 가격)
+    _yr_revenue(2029),     # 2029 (2018×90%, 동결, 제니스 가격)
+    _yr_revenue(2030),     # 2030 (2018×90%, 동결, 제니스 가격)
+]
 
 # 2026F 비용: 컨트롤 패널 (인건비 + 운영비) × 9개월 + 감가상각
 _monthly_total_cost = monthly_labor * 만 + op_total_monthly * 만  # 원 단위
@@ -5013,14 +5053,14 @@ if _ti == 12:
     rev_detail.append({'항목': '합계 (이론치)', '매출(원)': f'{custom_total_rev:,.0f}', '매출(억)': f'{custom_total_rev/억:.2f}'})
     dark_table(pd.DataFrame(rev_detail))
 
-    st.markdown("**보정계수 적용** (시즌/램프업은 월별 분배에만 적용 — 연 매출엔 영향 없음)")
+    st.markdown("**보정계수 적용** (시즌평균은 2026 연매출에만 추가 적용, 램프업은 월별 분배 전용)")
     adj_data = {
-        '보정 항목': ['이탈률(중도해지)', '환불률(구매후취소)', '상권 보정', '경제 보정', '월별 시즌평균(분배용)', '월별 램프업평균(분배용)', '연매출 종합 (2026F)', '연매출 종합 (2027F~)'],
+        '보정 항목': ['이탈률(중도해지)', '환불률(구매후취소)', '상권 보정', '경제 보정', '시즌 평균 (2026 only)', '램프업 평균 (월별 분배)', '연매출 종합 (2026F)', '연매출 종합 (2027F~)'],
         '계수': [f'{_churn_adj:.3f}', f'{_refund_adj:.3f}', f'{ta_rev_adj:.3f}', f'{econ_rev_adj:.3f}', f'{_season_avg:.3f}', f'{_ramp_avg:.3f}', f'{_adj_2026:.3f}', f'{_adj_normal:.3f}'],
         '의미': [f'1 − 이탈률 {w_churn*100:.1f}%', f'1 − 환불률 {s_refund*100:.1f}%',
                 f'상권점수 {ta_score:.0f}/70 기준', f'경제점수 {econ_score:.0f}/{ECON_BASELINE} 기준',
-                f'월별 분배용 (연 매출 영향 X)', f'월별 분배용 (연 매출 영향 X)',
-                f'이탈×환불×상권×경제', f'이탈×환불×상권×경제 (동일)'],
+                f'2026 연매출에 추가 적용 (9개월 비수기 반영)', f'월별 분배 전용 (연 매출 영향 X)',
+                f'이탈×환불×상권×경제×시즌평균', f'이탈×환불×상권×경제 (시즌 제외)'],
     }
     dark_table(pd.DataFrame(adj_data))
 
@@ -5031,7 +5071,7 @@ if _ti == 12:
         '금액': [f'{_golf_raw/억:.2f}억', f'{_rent_2026/억:.2f}억', f'{custom_total_rev/억:.2f}억',
                 f'×{_adj_2026:.3f}', f'{_golf_raw*_adj_2026/억:.2f}억', f'{rev_p[0]/억:.2f}억'],
         '산식': ['회원수×단가 합계', f'외부{s_rent_external}+계열사{s_rent_affiliate}×4개월', '골프+임대',
-                '이탈×환불×상권×경제', f'{_golf_raw/억:.2f}×{_adj_2026:.3f}', '보정 골프 + 임대'],
+                '이탈×환불×상권×경제×시즌평균', f'{_golf_raw/억:.2f}×{_adj_2026:.3f}', '보정 골프 + 임대'],
     }
     dark_table(pd.DataFrame(calc_2026))
 
