@@ -1750,7 +1750,7 @@ if False:
 # 내부 _ti 인덱스는 전체 TAB_NAMES 기준으로 유지하여 각 탭 코드블록 그대로 사용
 VISIBLE_TABS = ["대시보드", "운영전략", "매출추정", "비용추정", "추정손익계산서", "상권분석"]
 # 이전 라벨 → 새 라벨 마이그레이션 (저장된 main_nav 호환)
-_label_migration = {"매출": "매출추정", "비용": "비용추정", "손익BEP": "추정손익계산서", "상권경쟁": "상권분석"}
+_label_migration = {"매출": "매출추정", "비용": "비용추정", "손익BEP": "추정손익계산서", "상권경쟁": "상권분석", "현금흐름": "대시보드"}
 _visible_default = st.session_state.get('main_nav', VISIBLE_TABS[0])
 if _visible_default in _label_migration:
     _visible_default = _label_migration[_visible_default]
@@ -2246,13 +2246,31 @@ box-shadow:0 6px 20px rgba(0,0,0,0.5);font-size:11px;line-height:1.6;color:#cbd5
            yaxis_range=[0, max(sw)*1.15 if sw else 1.5], margin=_M)
         st.plotly_chart(fig_sw, use_container_width=True, key="pc_10")
 
-    # ── 5개년 요약 테이블 ──
-    subsec("5개년 손익 요약")
-    info("5개년 예측 기간의 주요 손익 지표입니다. 영업이익률이 양(+)이 되는 해부터 흑자 전환입니다.")
-    pl_d = {'항목': ['매출', '비용', '영업이익', 'EBITDA', '영업이익률', '회수율']}
+    # ── 5개년 손익계산서 (상세) ──
+    subsec("5개년 손익계산서")
+    info("2026~2030 5개년 예측 손익계산서입니다. 매출에서 비용을 차감한 영업이익과, 감가상각비를 더한 EBITDA를 함께 표시합니다. 회수율은 누적 EBITDA / 투자금입니다.")
+    pl_full = {'항목': ['확정매출', '총비용', '  (감가상각비)', '영업이익', 'EBITDA', '영업이익률(%)', 'EBITDA이익률(%)', '회수율(%)']}
     for i, yr in enumerate(D['yp']):
-        pl_d[yr] = [fmt억(rev_p[i]), fmt억(cost_p[i]), fmt억(op_p[i]), fmt억(ebitda_p[i]), f"{margins[i]:.1f}%", f"{rec_rate[i]*100:.1f}%"]
-    dark_table(pd.DataFrame(pl_d))
+        r, c, d_, o, e = rev_p[i], cost_p[i], dep[i], op_p[i], ebitda_p[i]
+        pl_full[yr] = [fmt억(r), fmt억(c), f"  ({fmt억(d_)})", fmt억(o), fmt억(e),
+                       f"{o/r*100:.1f}%" if r else "0%",
+                       f"{e/r*100:.1f}%" if r else "0%",
+                       f"{rec_rate[i]*100:.1f}%"]
+    dark_table(pd.DataFrame(pl_full))
+
+    # ── 5개년 현금흐름표 (대시보드 요약) ──
+    subsec("5개년 현금흐름표")
+    info("EBITDA(임대수익 포함)에서 법인세를 차감하여 영업현금흐름(OCF)·잉여현금흐름(FCF)을 산출합니다. 누적 FCF가 양(+)이면 현금이 축적되고 있음을 의미합니다.")
+    _cf_data = {'항목': ['EBITDA(임대포함)', '법인세(-)', '영업CF', 'FCF', '누적FCF']}
+    _cum_fcf_dash = 0
+    for i, yr in enumerate(D['yp']):
+        _tax_d = max(op_p[i] * s_tax_rate, 0)
+        _ocf_d = ebitda_p[i] - _tax_d
+        _fcf_d = _ocf_d
+        _cum_fcf_dash += _fcf_d
+        _cf_data[yr] = [fmt억(ebitda_p[i]), fmt억(_tax_d), fmt억(_ocf_d), fmt억(_fcf_d), fmt억(_cum_fcf_dash)]
+    dark_table(pd.DataFrame(_cf_data))
+    st.caption(f"※ 5년 누적 FCF: **{_cum_fcf_dash/억:.1f}억** · 투자금 {inv_won/억:.0f}억 대비 **{_cum_fcf_dash/inv_won*100:.1f}%** 회수")
 
 # ═══ TAB 1: Scenario ═══
 if _ti == 1:
@@ -3998,100 +4016,132 @@ if _ti == 5:
     for i, yr in enumerate(D['yp']): cd[yr] = [fmt만(cost_items_dyn[k][i])+'원' for k in cd['항목']]
     dark_table(pd.DataFrame(cd))
 
-# ═══ TAB 6: P&L + BEP ═══
+# ═══ TAB 6: 추정 손익계산서 (2018 과거 + 2026~2030 추정 통합 비교) ═══
 if _ti == 6:
-    sec("📋", "손익·BEP 분석")
-    warn("2026F는 6월 오픈 기준 **9개월(6~2월)** 실적입니다. 연간 환산 시 x12/9 = 1.33배가 필요합니다.")
-    info("⚠️ 2026F 월별 매출은 Excel 모델 기준이나, **현실적으로 오픈 초기(6~8월)는 인지도 부족 + 기존 회원권 만료 대기 + 여름 비수기가 겹쳐 정상 매출의 30~60% 수준**이 예상됩니다. 9월 이후 성수기 진입 시 점진적 정상화됩니다.")
-    subsec("5개년 손익계산서")
-    info("5개년 손익계산서입니다. 매출에서 비용을 차감한 영업이익과, 감가상각비를 더한 EBITDA를 함께 표시합니다. 회수율은 누적 EBITDA / 투자금입니다.")
-    pl_full = {'항목': ['확정매출', '총비용', '  (감가상각비)', '영업이익', 'EBITDA', '영업이익률(%)', 'EBITDA이익률(%)', '회수율(%)']}
+    sec("📋", "추정 손익계산서")
+    info("**제51기 2018 신진등촌골프연습장 실제 손익계산서** vs **2026~2030 재오픈 추정**을 한 표에 표시합니다. 한국 회계기준(KGAAP) — 임대료수익은 영업외수익으로 분리.")
+
+    # ── 2018 실제 손익계산서 (Excel 원본, 제51기 2018.3.1 ~ 2019.2.28) ──
+    # 출처: 신진등촌골프연습장 손익계산서 (사용자 제공 이미지)
+    _rev_18 = 2_823_863_701        # I. 매출액 (정기회원+일일회원+락카임대)
+    _cost_18 = 2_057_403_259       # IV. 판매비와관리비 (영업비용)
+    _dep_18 = 276_506_729          # 판관비 중 감가상각비
+    _op_18 = 766_460_442           # V. 영업이익
+    _nonop_inc_18 = 1_120_997_268  # VI. 영업외수익 (수입임대료 9.99억 + 수입관리비 + 잡이익 + 이자 + 환입)
+    _nonop_exp_18 = 2_309          # VII. 영업외비용 (잡손실)
+    _pretax_18 = 1_887_455_401     # VIII. 법인세차감전이익
+    _tax_18 = 0                    # IX. 법인세 등 (Excel 실제 0)
+    _net_18 = 1_887_455_401        # X. 당기순이익
+    _tax_rate = s_tax_rate         # 사이드바 법인세율 (2026~2030 적용)
+
+    # ── 2026~2030: 매출과 영업외수익(임대료 + 프로레슨) 분리 ──
+    # _adj_2026, _adj_normal는 위에서 이미 산출됨
+    # 영업외수익 구성: 프로레슨임대료(p_lesson) + 임대매장(rent_2026 또는 rent_annual)
+    _sales_p = [0]*5
+    _nonop_inc_p = [0]*5
+    _op_p_new = [0]*5  # 새 영업이익 = 매출 - 비용
+    _nonop_exp_p = [0]*5
+
+    # 2026: 9개월, _adj_2026 (시즌포함)
+    _lesson_adj_26 = p_lesson * _adj_2026
+    _nonop_inc_p[0] = _lesson_adj_26 + _rent_2026
+    _sales_p[0] = rev_p[0] - _nonop_inc_p[0]
+
+    # 2027~2030: 12개월, _adj_normal
+    for i in range(1, 5):
+        _lesson_adj = p_lesson * _adj_normal
+        _nonop_inc_p[i] = _lesson_adj + _rent_annual
+        _sales_p[i] = rev_p[i] - _nonop_inc_p[i]
+
+    # 새 영업이익 / 경상이익 / 법인세 / 당기순이익
+    for i in range(5):
+        _op_p_new[i] = _sales_p[i] - cost_p[i]
+    _pretax_p = [_op_p_new[i] + _nonop_inc_p[i] - _nonop_exp_p[i] for i in range(5)]
+    # 경상이익은 수학적으로 rev_p - cost_p = op_p (기존)와 동일하지만, 영업이익은 매출-비용으로 새로 분류
+    _tax_p = [max(_pretax_p[i] * _tax_rate, 0) for i in range(5)]
+    _net_p = [_pretax_p[i] - _tax_p[i] for i in range(5)]
+
+    # ── 통합 비교 표 ──
+    subsec("2018 실제 vs 2026~2030 추정 손익계산서 (단위: 억)")
+    info(f"**한국 회계기준** — 임대료수익(임대매장+프로레슨)은 영업외수익으로 분류. 2018 실제값은 Excel 원본 손익계산서(제51기). 법인세율 {_tax_rate*100:.0f}% 적용 (2026~ 추정).")
+
+    pl_rows = ['매출 (영업)', '  영업비용 (판관비)', '    (감가상각비)', '영업이익', '영업이익률(%)',
+               '  영업외수익', '    (수입임대료 등)', '  영업외비용', '경상이익(법인세차감전)', '  법인세', '당기순이익', '순이익률(%)']
+
+    def _fmt_eok(v):
+        """억 단위 포맷 (음수도 자연스럽게)"""
+        return f"{v/억:,.2f}"
+
+    pl_table = {'구분': pl_rows}
+    # 2018 컬럼
+    pl_table['2018A (실적)'] = [
+        _fmt_eok(_rev_18),
+        _fmt_eok(_cost_18),
+        f"({_fmt_eok(_dep_18)})",
+        _fmt_eok(_op_18),
+        f"{_op_18/_rev_18*100:.1f}%" if _rev_18 else "0.0%",
+        _fmt_eok(_nonop_inc_18),
+        '(임대 10.00억)',  # 수입임대료 999,916,320원
+        _fmt_eok(_nonop_exp_18),
+        _fmt_eok(_pretax_18),
+        _fmt_eok(_tax_18),
+        _fmt_eok(_net_18),
+        f"{_net_18/_rev_18*100:.1f}%" if _rev_18 else "0.0%",
+    ]
+    # 2026~2030 컬럼들
     for i, yr in enumerate(D['yp']):
-        r, c, d, o, e = rev_p[i], cost_p[i], dep[i], op_p[i], ebitda_p[i]
-        pl_full[yr] = [fmt억(r), fmt억(c), f"  ({fmt억(d)})", fmt억(o), fmt억(e), f"{o/r*100:.1f}%" if r else "0%", f"{e/r*100:.1f}%" if r else "0%", f"{rec_rate[i]*100:.1f}%"]
-    dark_table(pd.DataFrame(pl_full))
+        s, c_p, d_p, o_n = _sales_p[i], cost_p[i], dep[i], _op_p_new[i]
+        rent_part = _rent_2026 if i == 0 else _rent_annual
+        pl_table[yr] = [
+            _fmt_eok(s),
+            _fmt_eok(c_p),
+            f"({_fmt_eok(d_p)})",
+            _fmt_eok(o_n),
+            f"{o_n/s*100:.1f}%" if s else "0.0%",
+            _fmt_eok(_nonop_inc_p[i]),
+            f"({_fmt_eok(rent_part)} 임대)",
+            _fmt_eok(_nonop_exp_p[i]),
+            _fmt_eok(_pretax_p[i]),
+            _fmt_eok(_tax_p[i]),
+            _fmt_eok(_net_p[i]),
+            f"{_net_p[i]/s*100:.1f}%" if s else "0.0%",
+        ]
+    dark_table(pd.DataFrame(pl_table))
 
-    c1, c2 = st.columns(2)
-    with c1:
-        subsec("월별 매출 vs 비용 (2026, 현실 보정)")
-        info("오픈 초기 현실을 반영한 월별 추정입니다. 6월=오픈월(인지도 없음, 장마 시작), 7~8월=폭염 비수기, 9~10월=성수기+인지도 상승, 11~12월=기온 하락, 1~2월=겨울 비수기.")
-        # 현실 보정: 오픈초기+계절성+고객전환지연 반영
-        # mrev_custom은 이미 시즌×램프업×상권×경제 보정 적용됨 (이중 적용 방지)
-        fig = go.Figure()
-        fig.add_trace(go.Bar(name='매출', x=D['months'], y=[v/1e6 for v in mrev_custom], marker_color=C['blue'],
-            text=[f"{v/1e6:.0f}" for v in mrev_custom], textposition='inside', textfont=dict(size=11, color='white')))
-        fig.add_trace(go.Bar(name='비용', x=D['months'], y=[v/1e6 for v in mcost_custom], marker_color=C['red'],
-            text=[f"{v/1e6:.0f}" for v in mcost_custom], textposition='inside', textfont=dict(size=11, color='white')))
-        lo(fig, title='월별 매출 vs 비용 (백만원, 컨트롤패널 연동)', barmode='group', height=440, yaxis_title='백만원')
-        st.plotly_chart(fig)
-    with c2:
-        subsec("월별 손익 & 누적 (보정)")
-        info("보정된 월별 손익(매출-비용)과 누적 추이입니다. 오픈 초기에는 비용이 매출을 초과하여 적자가 누적되며, 성수기(9~10월)에 일부 회복됩니다.")
-        mpl = [r-c for r,c in zip(mrev_custom, mcost_custom)]
-        cum_m = []; c_=0
-        for v in mpl: c_+=v; cum_m.append(c_)
-        fig2 = go.Figure()
-        fig2.add_trace(go.Bar(name='월 손익', x=D['months'], y=[v/1e6 for v in mpl], marker_color=[C['green'] if v>=0 else C['red'] for v in mpl]))
-        fig2.add_trace(go.Scatter(name='누적', x=D['months'], y=[v/1e6 for v in cum_m], mode='lines+markers', line=dict(color=C['orange'], width=3)))
-        fig2.add_hline(y=0, line_dash="dash", line_color="#cbd5e1")
-        lo(fig2, title='월별 손익 및 누적 추이 (백만원)', height=420, yaxis_title='백만원')
-        st.plotly_chart(fig2)
-
-    subsec("월별 매출 항목별 분해")
-    info("2026년 월별 매출(골프 부분)을 상품별로 분해한 누적 막대 차트입니다(패드 연동). 임대는 4개월만 발생하므로 별도이며, 본 차트는 골프 9개월 매출만 표시합니다.")
-    fig_ms = go.Figure()
-    # mrev_custom은 골프 전용 매출이므로 임대 항목을 제외한 비중으로 분배
-    _golf_items = {k: v for k, v in custom_rev_items.items() if '임대' not in k}
-    _golf_total = sum(_golf_items.values())
-    for idx, (name, ann_val) in enumerate(_golf_items.items()):
-        share = ann_val / _golf_total if _golf_total else 0
-        monthly_vals = [v * share for v in mrev_custom]
-        fig_ms.add_trace(go.Bar(name=name, x=D['months'], y=[v/1e6 for v in monthly_vals], marker_color=PAL[idx%len(PAL)]))
-    lo(fig_ms, title='월별 매출 항목별 분해 — 골프 (백만원)', barmode='stack', height=420, yaxis_title='백만원')
-    st.plotly_chart(fig_ms)
-
-    # ── BEP Section (merged into P&L tab) ──
-    st.markdown("---")
-    sec("⚖️", "손익분기점(BEP) 분석")
-    info("손익분기점(BEP)은 매출과 비용이 동일하여 이익이 0인 지점입니다. BEP를 넘어서야 흑자가 시작되며, 안전마진이 클수록 경영 안정성이 높습니다.")
-    bk = st.columns(4)
-    bk[0].metric("BEP 매출", fmt억(bep_revenue))
-    bk[1].metric("BEP 회원수", f"{bep_members:,.0f}명")
-    bk[2].metric("공헌이익률", f"{contrib_margin*100:.1f}%")
-    bk[3].metric("안전마진", f"{safety_margin:.1f}%", delta="흑자" if safety_margin>0 else "적자")
-
-    c1, c2 = st.columns(2)
-    with c1:
-        subsec("BEP 차트")
-        info("매출선과 비용선이 교차하는 지점이 손익분기점입니다. 초록 점선 오른쪽 영역이 이익 구간입니다.")
-        rr = [bep_revenue*x/100 for x in range(50,151,10)]
-        tc = [fixed_total + v*var_ratio for v in rr]
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(name='매출', x=[r/억 for r in rr], y=[r/억 for r in rr], line=dict(color=C['blue'], width=3)))
-        fig.add_trace(go.Scatter(name='총비용', x=[r/억 for r in rr], y=[c/억 for c in tc], line=dict(color=C['red'], width=3)))
-        fig.add_trace(go.Scatter(name='고정비', x=[r/억 for r in rr], y=[fixed_total/억]*len(rr), line=dict(color=C['orange'], width=2, dash='dash')))
-        fig.add_vline(x=bep_revenue/억, line_dash="dash", line_color=C['green'], annotation_text="BEP", annotation_font_size=11)
-        lo(fig, title='손익분기점(BEP) 분석', height=420, xaxis_title='매출(억)', yaxis_title='금액(억)')
-        st.plotly_chart(fig)
-    with c2:
-        subsec("비용구조 워터폴")
-        info("고정비에서 시작하여 준변동비, 변동비를 더한 총비용과 매출을 비교하는 워터폴 차트입니다. 최종 영업이익이 양(+)이면 흑자입니다.")
-        fig = go.Figure(go.Waterfall(x=["고정비","준변동비(60%F)","변동비","총비용","매출(2026F)","영업이익"],
-            y=[fixed_total/억, semi_total*0.6/억, var_total/억, 0, rev_p[0]/억 if rev_p[0] else 0, 0],
-            measure=["absolute","relative","relative","total","absolute","total"],
-            connector={"line":{"color":C['slate']}}, decreasing={"marker":{"color":C['red']}}, increasing={"marker":{"color":C['green']}}, totals={"marker":{"color":C['blue']}}))
-        lo(fig, title='비용구조 워터폴 (억원)', height=420)
-        st.plotly_chart(fig)
-
-    subsec("월별 BEP 도달 분석 (2026)")
-    info("2026년 각 월별 매출이 월간 BEP(빨간 점선)를 초과하는지 확인합니다. 초과 월이 많을수록 연간 흑자 가능성이 높습니다.")
-    monthly_bep = fixed_total/12/contrib_margin if contrib_margin else 0
-    fig_mb = go.Figure()
-    fig_mb.add_trace(go.Bar(name='월 매출', x=D['months'], y=[v/1e6 for v in mrev_custom], marker_color=C['blue']))
-    fig_mb.add_hline(y=monthly_bep/1e6, line_dash="dash", line_color=C['red'], annotation_text=f"월BEP {monthly_bep/1e6:.0f}백만", annotation_font_size=11)
-    bep_met = sum(1 for v in mrev_custom if v >= monthly_bep)
-    lo(fig_mb, title=f'월별 BEP 달성 현황: {bep_met}/9개월', height=380, yaxis_title='백만원')
-    st.plotly_chart(fig_mb)
+    # ── 핵심 차이 요약 ──
+    subsec("핵심 차이 요약")
+    avg_fut_sales = sum(_sales_p)/5
+    avg_fut_op_new = sum(_op_p_new)/5
+    avg_fut_nonop = sum(_nonop_inc_p)/5
+    avg_fut_net = sum(_net_p)/5
+    diff_tbl = {
+        '지표': ['연 매출', '영업이익', '영업이익률', '영업외수익', '당기순이익', '순이익률'],
+        '2018A (실제)': [
+            _fmt_eok(_rev_18)+'억',
+            _fmt_eok(_op_18)+'억',
+            f"{_op_18/_rev_18*100:.1f}%",
+            _fmt_eok(_nonop_inc_18)+'억',
+            _fmt_eok(_net_18)+'억',
+            f"{_net_18/_rev_18*100:.1f}%",
+        ],
+        '2026~2030 평균': [
+            _fmt_eok(avg_fut_sales)+'억',
+            _fmt_eok(avg_fut_op_new)+'억',
+            f"{avg_fut_op_new/avg_fut_sales*100:.1f}%" if avg_fut_sales else "0.0%",
+            _fmt_eok(avg_fut_nonop)+'억',
+            _fmt_eok(avg_fut_net)+'억',
+            f"{avg_fut_net/avg_fut_sales*100:.1f}%" if avg_fut_sales else "0.0%",
+        ],
+        '차이': [
+            f"{(avg_fut_sales/_rev_18-1)*100:+.1f}%" if _rev_18 else "-",
+            f"{(avg_fut_op_new-_op_18)/억:+,.2f}억",
+            f"{(avg_fut_op_new/avg_fut_sales - _op_18/_rev_18)*100:+.1f}%p" if avg_fut_sales and _rev_18 else "-",
+            f"{(avg_fut_nonop-_nonop_inc_18)/억:+,.2f}억",
+            f"{(avg_fut_net-_net_18)/억:+,.2f}억",
+            f"{(avg_fut_net/avg_fut_sales - _net_18/_rev_18)*100:+.1f}%p" if avg_fut_sales and _rev_18 else "-",
+        ],
+    }
+    dark_table(pd.DataFrame(diff_tbl))
 
 # ═══ TAB 7: Investment/IRR ═══
 if _ti == 7:
